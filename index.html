@@ -62,11 +62,13 @@ input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
 .speed{font-family:var(--cond);font-weight:600;font-size:34px;line-height:1;color:#fff;text-shadow:0 1px 4px #000}
 .speed small{font-size:14px;color:var(--muted);font-weight:500;margin-left:4px}
 .hud .meta{font-size:12px;color:var(--muted);text-shadow:0 1px 3px #000}
-.probe{position:absolute;top:10px;right:max(12px,env(safe-area-inset-right,0px));background:rgba(7,10,16,.72);border:1px solid var(--line);border-radius:4px;padding:6px 9px;font-size:12px;font-variant-numeric:tabular-nums;pointer-events:none}
+.side{position:absolute;top:10px;right:max(12px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:6px;width:max-content;max-width:48%}
+.probe{background:rgba(7,10,16,.72);border:1px solid var(--line);border-radius:4px;padding:6px 9px;font-size:12px;font-variant-numeric:tabular-nums;pointer-events:none}
 .probe b{display:block;font-family:var(--cond);letter-spacing:.1em;text-transform:uppercase;font-size:11px;color:var(--amber);font-weight:600;margin-bottom:2px}
 .probe div{display:flex;justify-content:space-between;gap:14px}
 .probe div span:last-child{color:#fff}
-.tell{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);display:flex;gap:8px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:calc(100% - 120px)}
+.tell{display:flex;flex-direction:column;gap:6px}
+.savemsg{font-size:11px;color:var(--muted);margin:0;max-width:150px;text-shadow:0 1px 3px #000}
 .tell button{background:rgba(7,10,16,.72);border:1px solid var(--line);color:var(--muted);border-radius:4px;padding:7px 11px;font:inherit;font-weight:500;cursor:pointer}
 .tell button[aria-pressed=true].lowb{color:var(--low);border-color:var(--low)}
 .tell button[aria-pressed=true].highb{color:var(--high);border-color:var(--high)}
@@ -92,16 +94,20 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <div class="speed"><span id="hudSpeed">0</span><small>km/h</small></div>
       <div class="meta" id="hudMeta">0 m driven</div>
     </div>
-    <div class="probe" id="probe" aria-live="off"></div>
+    <div class="side">
+      <div class="probe" id="probe" aria-live="off"></div>
+      <div class="tell">
+        <button id="btnLow" class="lowb" aria-pressed="true">Low beam</button>
+        <button id="btnHigh" class="highb" aria-pressed="false">High beam</button>
+        <button id="btnPause" class="plain">Pause</button>
+        <button id="btnSave" class="plain" hidden>Save PNG</button>
+        <p class="savemsg" id="saveMsg" role="status" hidden></p>
+      </div>
+    </div>
     <div class="isokey" id="isoKey" hidden></div>
     <div class="legend" id="legend" hidden><i></i><div><span>0.1</span><span>1</span><span>10</span><span>100 lx</span></div></div>
     <button class="steer" id="steerL" aria-label="Steer left">&#9664;</button>
     <button class="steer" id="steerR" aria-label="Steer right">&#9654;</button>
-    <div class="tell">
-      <button id="btnLow" class="lowb" aria-pressed="true">Low beam</button>
-      <button id="btnHigh" class="highb" aria-pressed="false">High beam</button>
-      <button id="btnPause" class="plain">Pause</button>
-    </div>
     <div class="fail" id="fail" hidden></div>
   </div>
 
@@ -797,7 +803,47 @@ function trackAt(s) {
   }
   $('btnLow').addEventListener('click', function () { setBeam('lb', !cfg.lb); });
   $('btnHigh').addEventListener('click', function () { setBeam('hb', !cfg.hb); });
-  function setPaused(p) { paused = p; $('btnPause').textContent = p ? 'Drive' : 'Pause'; }
+  function setPaused(p) { paused = p; $('btnPause').textContent = p ? 'Drive' : 'Pause'; $('btnSave').hidden = !p; if (!p) $('saveMsg').hidden = true; }
+
+  // Export the paused view as a PNG with a caption strip of the settings behind it.
+  function say(t) { var m = $('saveMsg'); m.textContent = t; m.hidden = false; }
+  function fmtLx(e) { return (e >= 10 ? e.toFixed(0) : e >= 1 ? e.toFixed(1) : e.toFixed(2)) + ' lx'; }
+  function exportPng() {
+    renderer.render(scene, camera);                    // fresh frame, read back in the same task
+    var src = renderer.domElement, c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+    var g = c.getContext('2d'); g.drawImage(src, 0, 0);
+    var beams = [cfg.lb ? 'Low beam' : null, cfg.hb ? 'High beam' : null].filter(Boolean).join(' + ') || 'Lamps off';
+    var lines = [
+      'Virtual Driver \u00b7 ' + beams + ' \u00b7 ' + cfg.side + ' \u00b7 road ' + cfg.roadW.toFixed(1) + ' m \u00b7 lamps ' + cfg.lampH.toFixed(2) + ' m high, ' + cfg.spacing.toFixed(2) + ' m apart \u00b7 eye ' + cfg.eyeH.toFixed(2) + ' m',
+      'Road illuminance ahead: ' + [25, 50, 75, 100].map(function (d) { return d + ' m ' + fmtLx(roadIlluminance(d, 0, cfg, grids)); }).join(', ') +
+        (shared.uIsoN.value > 0 ? ' \u00b7 isolux ' + shared.uIso.value.slice(0, shared.uIsoN.value).join(', ') + ' lx' : '') +
+        ' \u00b7 adaptation ' + adapt.toFixed(2) + ' cd/m\u00b2'
+    ];
+    var px = Math.max(11, Math.round(c.height / 42)); g.font = px + 'px sans-serif';
+    var widest = Math.max(g.measureText(lines[0]).width, g.measureText(lines[1]).width);
+    if (widest > c.width - 2 * px) { px = Math.max(8, Math.floor(px * (c.width - 2 * px) / widest)); g.font = px + 'px sans-serif'; }
+    var band = Math.round(px * 3.2);
+    g.fillStyle = 'rgba(4,6,11,0.78)'; g.fillRect(0, c.height - band, c.width, band);
+    g.fillStyle = '#dbe2ec'; g.textBaseline = 'middle';
+    g.fillText(lines[0], px, c.height - band + px * 1.0); g.fillText(lines[1], px, c.height - band + px * 2.25);
+    var d = new Date(), z = function (n) { return (n < 10 ? '0' : '') + n; };
+    var name = 'virtual-driver-' + d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + '-' + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds()) + '.png';
+    say('Preparing image\u2026');
+    c.toBlob(function (blob) {
+      if (!blob) { say('The image could not be created.'); return; }
+      if (window.claude && window.claude.use) {       // inside Claude: the viewer confirms the save
+        window.claude.use('downloads').then(function (dl) {
+          if (!dl) { say('Saving is not available in this view.'); return; }
+          return dl.save({ filename: name, data: blob }).then(function () { say('Saved ' + name); });
+        }).catch(function (e) { say(e && e.code === 'declined' ? 'Save cancelled.' : e && e.code === 'rate_limited' ? 'A save is already open. Try again in a moment.' : 'Saving is not available in this view.'); });
+      } else {                                        // plain web page: ordinary browser download
+        var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+        say('Download started: ' + name);
+      }
+    }, 'image/png');
+  }
+  $('btnSave').addEventListener('click', exportPng);
   $('btnPause').addEventListener('click', function () { setPaused(!paused); });
   $('btnReset').addEventListener('click', resetCar);
 
