@@ -46,6 +46,7 @@ input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
 .seg button+button{border-left:1px solid var(--line)}
 .seg button[aria-pressed=true]{background:var(--amber);color:#1a1204}
 .check{display:flex;align-items:center;gap:8px}
+.swatch{display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid var(--line);vertical-align:-1px;margin-right:6px}
 .stack{display:flex;flex-direction:column;gap:4px}
 .stack small{color:var(--muted)}
 .slot{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;background:var(--raise);border:1px solid var(--line);border-radius:4px;padding:7px 8px}
@@ -127,6 +128,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <div class="seg" id="segCockpit"><button data-v="off" aria-pressed="false">No cockpit</button><button data-v="car" aria-pressed="true">Car</button><button data-v="truck" aria-pressed="false">Truck</button></div>
       <label class="check"><input type="checkbox" id="autoExp" checked> Auto exposure from eye adaptation</label>
       <div class="row"><span>Adaptation luminance</span><span class="val" id="adaptVal">&ndash;</span></div>
+      <div class="row"><span>Mesopic luminance</span><span class="val" id="mesoVal">&ndash;</span></div>
       <div class="row"><label for="exposure">Exposure trim <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
       <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0">
       <label class="check"><input type="checkbox" id="shadows" checked> Shadows from trees, posts and signs</label>
@@ -138,6 +140,11 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
 
     <section>
       <h2>Photometry</h2>
+      <div class="seg" id="segSrc"><button data-v="halogen" aria-pressed="false">Halogen</button><button data-v="hid" aria-pressed="false">HID</button><button data-v="led" aria-pressed="true">LED</button></div>
+      <div class="row"><label for="cct">Colour temperature <small>(K)</small></label><input type="number" id="cct" value="5700" step="100" min="5000" max="6500"></div>
+      <p class="note"><i class="swatch" id="srcSwatch"></i><span id="srcInfo"></span></p>
+      <label class="check"><input type="checkbox" id="chromAdapt" checked> Eye colour adaptation</label>
+      <label class="check"><input type="checkbox" id="mesoOn" checked> Mesopic vision (night brightness and colour)</label>
       <div class="slot"><div><b>Low beam, left lamp</b><span id="lbL_s"></span></div><label class="btn" for="lbL_f">Load</label><button class="btn" data-clear="lbL" aria-label="Remove low beam left file">&times;</button><input type="file" id="lbL_f" data-slot="lbL"></div>
       <div class="slot"><div><b>Low beam, right lamp</b><span id="lbR_s"></span></div><label class="btn" for="lbR_f">Load</label><button class="btn" data-clear="lbR" aria-label="Remove low beam right file">&times;</button><input type="file" id="lbR_f" data-slot="lbR"></div>
       <div class="slot"><div><b>High beam, left lamp</b><span id="hbL_s"></span></div><label class="btn" for="hbL_f">Load</label><button class="btn" data-clear="hbL" aria-label="Remove high beam left file">&times;</button><input type="file" id="hbL_f" data-slot="hbL"></div>
@@ -401,6 +408,84 @@ function trackAt(s) {
     th: TRACK.th[i] + (TRACK.th[i + 1] - TRACK.th[i]) * f
   };
 }
+// ---------- Light source colour and eye response ----------
+// Spectra on a 5 nm grid 380..780 nm. CIE 1931 2deg colour matching functions from the Wyman, Sloan & Shirley (2013)
+// multi-lobe fit; CIE 1951 scotopic V'(lambda) tabulated at 10 nm.
+var WL = []; for (var wl = 380; wl <= 780; wl += 5) WL.push(wl);
+function lobe(l, mu, s1, s2) { var t = (l - mu) / (l < mu ? s1 : s2); return Math.exp(-0.5 * t * t); }
+var CMF = WL.map(function (l) {
+  return [1.056 * lobe(l, 599.8, 37.9, 31.0) + 0.362 * lobe(l, 442.0, 16.0, 26.7) - 0.065 * lobe(l, 501.1, 20.4, 26.2),
+          0.821 * lobe(l, 568.8, 46.9, 40.5) + 0.286 * lobe(l, 530.9, 16.3, 31.1),
+          1.217 * lobe(l, 437.0, 11.8, 36.0) + 0.681 * lobe(l, 459.0, 26.0, 13.8)];
+});
+var VS10 = [0.000589, 0.002209, 0.00929, 0.03484, 0.0966, 0.1998, 0.3281, 0.455, 0.567, 0.676, 0.793, 0.904, 0.982, 0.997, 0.935,
+  0.811, 0.650, 0.481, 0.3288, 0.2076, 0.1212, 0.0655, 0.03315, 0.01593, 0.00737, 0.003335, 0.001497, 0.000677, 0.0003129, 0.000148,
+  0.0000715, 0.00003533, 0.0000178, 0.00000914, 0.00000478, 0.000002546, 0.000001379, 0.00000076, 0.000000425, 0.000000241, 0.000000139];
+var VS = WL.map(function (l) { var f = (l - 380) / 10, i = Math.min(Math.floor(f), 39), t = f - i; return VS10[i] * (1 - t) + VS10[i + 1] * t; });
+
+function planck(l, T) { return Math.pow(l * 1e-3, -5) / (Math.exp(1.4388e7 / (l * T)) - 1); }
+function spdOf(fn) { return WL.map(fn); }
+function xyzOf(spd) {
+  var X = 0, Y = 0, Z = 0, Ys = 0;
+  for (var i = 0; i < WL.length; i++) { X += spd[i] * CMF[i][0]; Y += spd[i] * CMF[i][1]; Z += spd[i] * CMF[i][2]; Ys += spd[i] * VS[i]; }
+  return { X: X / Y, Y: 1, Z: Z / Y, x: X / (X + Y + Z), y: Y / (X + Y + Z), SP: 1699 * Ys / (683 * Y) };
+}
+function mccamy(x, y) { var n = (x - 0.3320) / (0.1858 - y); return 449 * n * n * n + 3525 * n * n + 6823.3 * n + 5520.33; }
+function duv(x, y, T) {              // distance from the Planckian locus in CIE 1960 uv (positive = above, greenish)
+  var u = 4 * x / (-2 * x + 12 * y + 3), v = 6 * y / (-2 * x + 12 * y + 3), p = xyzOf(spdOf(function (l) { return planck(l, T); }));
+  var up = 4 * p.x / (-2 * p.x + 12 * p.y + 3), vp = 6 * p.y / (-2 * p.x + 12 * p.y + 3);
+  return Math.sign(v - vp) * Math.hypot(u - up, v - vp);
+}
+// Model spectra. k tunes the colour; solveCCT finds the k that gives the requested CCT.
+var SOURCES = {
+  halogen: { label: 'Halogen', cct: 3200, min: 2700, max: 3600,
+    spd: function (k) { return spdOf(function (l) { return planck(l, k); }); }, k0: 2000, k1: 4500 },
+  hid: { label: 'HID', cct: 4300, min: 3800, max: 5500,       // metal halide: continuum plus Na, Sc and Hg lines
+    spd: function (k) {
+      return spdOf(function (l) {
+        return 0.55 * planck(l, k) / planck(555, k) + 0.55 * lobe(l, 589, 3.5, 3.5) + 0.28 * lobe(l, 546, 2, 2) + 0.22 * lobe(l, 436, 2, 2)
+          + 0.12 * lobe(l, 405, 2, 2) + 0.2 * lobe(l, 578, 2.5, 2.5) + 0.25 * lobe(l, 470, 18, 18) + 0.3 * lobe(l, 530, 22, 22) + 0.18 * lobe(l, 625, 12, 12);
+      });
+    }, k0: 3000, k1: 25000 },
+  led: { label: 'LED', cct: 5700, min: 5000, max: 6500,       // blue die plus broad YAG phosphor
+    spd: function (k) { return spdOf(function (l) { return k * lobe(l, 450, 9.5, 11) + lobe(l, 558, 42, 62); }); }, k0: 0.05, k1: 3 }
+};
+function solveCCT(src, target) {
+  var a = src.k0, b = src.k1, fa = mccamy(xyzOf(src.spd(a)).x, xyzOf(src.spd(a)).y) - target;
+  for (var i = 0; i < 50; i++) {
+    var m = 0.5 * (a + b), c = xyzOf(src.spd(m)), fm = mccamy(c.x, c.y) - target;
+    if ((fm < 0) === (fa < 0)) { a = m; fa = fm; } else b = m;
+  }
+  var r = xyzOf(src.spd(0.5 * (a + b))); r.cct = mccamy(r.x, r.y); r.duv = duv(r.x, r.y, r.cct); return r;
+}
+// CIE 191:2010 mesopic luminance from photopic luminance Lp and the source S/P ratio.
+function mesopic(Lp, SP) {
+  var V0 = 683 / 1699, Ls = Lp * SP, m = 0.5, L = Lp;
+  if (Lp >= 5) return { L: Lp, m: 1 };
+  for (var i = 0; i < 30; i++) {
+    L = (m * Lp + (1 - m) * Ls * V0) / (m + (1 - m) * V0);
+    m = Math.min(1, Math.max(0, 0.767 + 0.3334 * Math.log10(Math.max(L, 1e-9))));
+  }
+  return { L: L, m: m };
+}
+// Colour of the light as seen on screen (linear sRGB, luminance 1): CAT02 von Kries adaptation from the source white
+// towards D65 with degree D. D = 0 shows the light as a D65-balanced camera would; D = 1 is full adaptation (neutral).
+var CAT = [[0.7328, 0.4296, -0.1624], [-0.7036, 1.6975, 0.0061], [0.0030, 0.0136, 0.9834]];
+function mul(M, v) { return [M[0][0] * v[0] + M[0][1] * v[1] + M[0][2] * v[2], M[1][0] * v[0] + M[1][1] * v[1] + M[1][2] * v[2], M[2][0] * v[0] + M[2][1] * v[1] + M[2][2] * v[2]]; }
+function inv3(m) {
+  var a = m[0][0], b = m[0][1], c = m[0][2], d = m[1][0], e = m[1][1], f = m[1][2], g = m[2][0], h = m[2][1], i = m[2][2];
+  var A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C;
+  return [[A / det, -(b * i - c * h) / det, (b * f - c * e) / det], [B / det, (a * i - c * g) / det, -(a * f - c * d) / det], [C / det, -(a * h - b * g) / det, (a * e - b * d) / det]];
+}
+var CATI = inv3(CAT), TOSRGB = [[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]];
+function catDegree(La) { return 0.8 * (1 - Math.exp((-La - 42) / 92) / 3.6); }     // CAT02, dark surround (F = 0.8)
+function lightRGB(src, D) {
+  var w = mul(CAT, [src.X, 1, src.Z]), d65 = mul(CAT, [0.95047, 1, 1.08883]);
+  var xyz = mul(CATI, [D * d65[0] + (1 - D) * w[0], D * d65[1] + (1 - D) * w[1], D * d65[2] + (1 - D) * w[2]]);
+  var rgb = mul(TOSRGB, xyz).map(function (c) { return Math.max(0, c); });
+  var Y = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+  return rgb.map(function (c) { return c / Y; });
+}
 //</core>
 
 // ---------- Scene ----------
@@ -433,7 +518,7 @@ function trackAt(s) {
     'uniform sampler2D uLBL; uniform sampler2D uLBR; uniform sampler2D uHBL; uniform sampler2D uHBR; uniform sampler2D uMap;',
     'uniform vec3 uLampL; uniform vec3 uLampR; uniform mat3 uW2V; uniform vec2 uAim; uniform vec2 uOn; uniform vec2 uGrid;',
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
-    'uniform vec3 uAlbedo;',
+    'uniform vec3 uAlbedo; uniform vec3 uLight; uniform float uMeso;',
     'uniform float uIso[8]; uniform float uIsoN;',
     'uniform sampler2D uShadowMap; uniform mat4 uShadowMat; uniform float uShadowOn; uniform vec2 uShadowNF; uniform vec2 uShadowPx;',
     'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv; varying vec2 vTrack;',
@@ -506,7 +591,11 @@ function trackAt(s) {
     '    col = ramp(clamp(t,0.0,1.0)) * smoothstep(-0.25, 0.0, t) * (0.7 + 0.3*clamp(max(alb.r,max(alb.g,alb.b))*2.0,0.0,1.0));',
     '    col = max(col, alb*0.25);',
     '  } else {',
-    '    vec3 lum = alb*(es/PI) + rc*retro*ep + alb*0.004;',   // cd/m2; last term is faint night-sky ambient
+    '    vec3 lum = (alb*(es/PI) + rc*retro*ep) * uLight + alb*0.004;',
+    '    if (uMeso > 0.5) {',              // colour fades towards grey as each patch falls into mesopic and scotopic vision (CIE 191 m)
+    '      float Y = dot(lum, vec3(0.2126,0.7152,0.0722));',
+    '      lum = mix(vec3(Y), lum, clamp(0.767 + 0.3334*log(max(Y,1e-9))/log(10.0), 0.0, 1.0));',
+    '    }',   // cd/m2; last term is faint night-sky ambient
     '    col = pow(vec3(1.0) - exp(-lum*uExposure), vec3(1.0/2.2));',
     '  }',
     '  if (isGround && uIsoN > 0.5) {',                 // isolux lines: contours of ground illuminance, about 1 px wide
@@ -529,6 +618,7 @@ function trackAt(s) {
     uGrid: { value: new THREE.Vector2(GRID.NH, GRID.NV) },
     uExposure: { value: 1 }, uMode: { value: 0 }, uRoadW: { value: 7 },
     uIso: { value: [1, 1, 1, 1, 1, 1, 1, 1] }, uIsoN: { value: 0 },
+    uLight: { value: new THREE.Vector3(1, 1, 1) }, uMeso: { value: 1 },
     uShadowMap: { value: null }, uShadowMat: { value: new THREE.Matrix4() }, uShadowOn: { value: 0 },
     uShadowNF: { value: new THREE.Vector2(0.8, 500) }, uShadowPx: { value: new THREE.Vector2(1 / 2048, 1 / 1024) }
   };
@@ -831,6 +921,20 @@ function trackAt(s) {
     box.innerHTML = cockpitMarkup(cockpit, cfg.side === 'LHT');
     ckSpeed = document.getElementById('ckSpeed'); ckLow = document.getElementById('ckLow'); ckHigh = document.getElementById('ckHigh');
   }
+  // light source: colour, S/P ratio and the settings readout
+  var src = { key: 'led', data: null };
+  function applySource() {
+    var S = SOURCES[src.key], el = $('cct');
+    el.min = S.min; el.max = S.max;
+    var T = Math.round(num('cct', S.min, S.max, S.cct)); el.value = T;
+    src.data = solveCCT(S, T);
+    var c = lightRGB(src.data, 0), mx = Math.max(c[0], c[1], c[2]);
+    $('srcSwatch').style.background = 'rgb(' + c.map(function (v) { return Math.round(255 * Math.pow(v / mx, 1 / 2.2)); }).join(',') + ')';
+    $('srcInfo').textContent = S.label + ' ' + T + ' K \u00b7 x ' + src.data.x.toFixed(3) + ', y ' + src.data.y.toFixed(3) + ' \u00b7 S/P ' + src.data.SP.toFixed(2);
+    tick = 0;                                     // refresh the light colour on the next frame
+  }
+  seg('segSrc', function (v) { src.key = v; $('cct').value = SOURCES[v].cct; applySource(); });
+  $('cct').addEventListener('change', applySource);
   seg('segMode', setMode); seg('segView', setView);
   seg('segCockpit', function (v) { cockpit = v; buildCockpit(); });
   seg('segSide', function (v) {
@@ -856,12 +960,12 @@ function trackAt(s) {
     var src = renderer.domElement, c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
     var g = c.getContext('2d'); g.drawImage(src, 0, 0);
     var finish = function () {
-    var beams = [cfg.lb ? 'Low beam' : null, cfg.hb ? 'High beam' : null].filter(Boolean).join(' + ') || 'Lamps off';
+    var beams = ([cfg.lb ? 'Low beam' : null, cfg.hb ? 'High beam' : null].filter(Boolean).join(' + ') || 'Lamps off') + ' \u00b7 ' + SOURCES[src.key].label + ' ' + Math.round(src.data.cct) + ' K';
     var lines = [
       'Virtual Driver \u00b7 ' + beams + ' \u00b7 ' + cfg.side + ' \u00b7 road ' + cfg.roadW.toFixed(1) + ' m \u00b7 lamps ' + cfg.lampH.toFixed(2) + ' m high, ' + cfg.spacing.toFixed(2) + ' m apart \u00b7 eye ' + cfg.eyeH.toFixed(2) + ' m',
       'Road illuminance ahead: ' + [25, 50, 75, 100].map(function (d) { return d + ' m ' + fmtLx(roadIlluminance(d, 0, cfg, grids)); }).join(', ') +
         (shared.uIsoN.value > 0 ? ' \u00b7 isolux ' + shared.uIso.value.slice(0, shared.uIsoN.value).join(', ') + ' lx' : '') +
-        ' \u00b7 adaptation ' + adapt.toFixed(2) + ' cd/m\u00b2'
+        ' \u00b7 adaptation ' + adapt.toFixed(2) + ' cd/m\u00b2 \u00b7 S/P ' + src.data.SP.toFixed(2)
     ];
     var px = Math.max(11, Math.round(c.height / 42)); g.font = px + 'px sans-serif';
     var widest = Math.max(g.measureText(lines[0]).width, g.measureText(lines[1]).width);
@@ -982,14 +1086,23 @@ function trackAt(s) {
     // exposure: the eye adapts to the lit road ahead, quickly when it gets brighter and slowly when it gets darker
     var Lw = adaptationLuminance(cfg, grids, cfg.roadW, car.lat);
     adapt = adapt > 0 ? adapt * Math.pow(Lw / adapt, Math.min(1, dt / (Lw > adapt ? 0.4 : 1.5))) : Lw;
-    shared.uExposure.value = ($('autoExp').checked ? wardScale(adapt, 200) : 1) * Math.pow(2, cfg.ev);
-    if (tick++ % 12 === 0) $('adaptVal').textContent = (adapt >= 1 ? adapt.toFixed(1) : adapt.toFixed(2)) + ' cd/m\u00b2';
+    // mesopic response (CIE 191): what the eye sees depends on the source S/P ratio at night adaptation levels
+    var mesoOn = $('mesoOn').checked, meso = mesoOn ? mesopic(adapt, src.data.SP) : { L: adapt, m: 1 };
+    var gain = adapt > 0 ? meso.L / adapt : 1;
+    shared.uMeso.value = mesoOn ? 1 : 0;
+    shared.uExposure.value = gain * ($('autoExp').checked ? wardScale(meso.L, 200) : 1) * Math.pow(2, cfg.ev);
+    if (tick++ % 12 === 0) {
+      var lc = lightRGB(src.data, $('chromAdapt').checked ? catDegree(meso.L) : 0); shared.uLight.value.set(lc[0], lc[1], lc[2]);
+      var f2 = function (v) { return (v >= 1 ? v.toFixed(1) : v.toFixed(2)) + ' cd/m\u00b2'; };
+      $('adaptVal').textContent = f2(adapt);
+      $('mesoVal').textContent = mesoOn ? f2(meso.L) + ' (\u00d7' + gain.toFixed(2) + ')' : 'off';
+    }
     renderShadows();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }
 
-  applyMarkers(); applyIso(); buildCockpit(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
+  applySource(); applyMarkers(); applyIso(); buildCockpit(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
   requestAnimationFrame(frame);
 })();
 </script>
