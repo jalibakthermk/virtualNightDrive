@@ -37,7 +37,7 @@ section{display:flex;flex-direction:column;gap:8px}
 .row{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:10px;align-items:center}
 .row label{color:var(--fg)}
 .row small{color:var(--muted)}
-input[type=number]{width:100%;background:var(--raise);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:6px 8px;font:inherit;font-variant-numeric:tabular-nums}
+input[type=number],input[type=text]{width:100%;background:var(--raise);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:6px 8px;font:inherit;font-variant-numeric:tabular-nums}
 input[type=range]{width:100%;accent-color:var(--amber)}
 input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
 :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
@@ -46,6 +46,8 @@ input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
 .seg button+button{border-left:1px solid var(--line)}
 .seg button[aria-pressed=true]{background:var(--amber);color:#1a1204}
 .check{display:flex;align-items:center;gap:8px}
+.stack{display:flex;flex-direction:column;gap:4px}
+.stack small{color:var(--muted)}
 .slot{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;background:var(--raise);border:1px solid var(--line);border-radius:4px;padding:7px 8px}
 .slot b{font-weight:500;display:block}
 .slot span{color:var(--muted);font-size:12px;display:block;overflow-wrap:anywhere}
@@ -75,6 +77,9 @@ input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
 .legend{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:64px;width:150px;font-size:11px;color:var(--fg);font-variant-numeric:tabular-nums;pointer-events:none}
 .legend i{display:block;height:8px;border-radius:2px;background:linear-gradient(90deg,#1b2a8c,#17a6c4,#35b657,#f2d13a,#e8402a)}
 .legend div{display:flex;justify-content:space-between;margin-top:2px}
+.isokey{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:100px;display:flex;flex-direction:column;gap:2px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;text-shadow:0 1px 3px #000}
+.isokey span{display:flex;align-items:center;gap:6px}
+.isokey i{display:block;width:14px;height:3px;border-radius:1px}
 .fail{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--bad)}
 kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);border-radius:3px;padding:0 5px;font-size:12px}
 </style>
@@ -88,6 +93,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <div class="meta" id="hudMeta">0 m driven</div>
     </div>
     <div class="probe" id="probe" aria-live="off"></div>
+    <div class="isokey" id="isoKey" hidden></div>
     <div class="legend" id="legend" hidden><i></i><div><span>0.1</span><span>1</span><span>10</span><span>100 lx</span></div></div>
     <button class="steer" id="steerL" aria-label="Steer left">&#9664;</button>
     <button class="steer" id="steerR" aria-label="Steer right">&#9654;</button>
@@ -115,6 +121,9 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0">
       <label class="check"><input type="checkbox" id="shadows" checked> Shadows from trees, posts and signs</label>
       <label class="check"><input type="checkbox" id="markers" checked> Distance markers</label>
+      <div class="stack"><label for="markerList">Marker distances <small>(m, comma separated)</small></label><input type="text" id="markerList" value="25, 50, 75, 100, 150, 200" inputmode="decimal" autocomplete="off"></div>
+      <label class="check"><input type="checkbox" id="isoOn" checked> Isolux lines on the road</label>
+      <div class="stack"><label for="isoList">Isolux levels <small>(lx, comma separated)</small></label><input type="text" id="isoList" value="1, 3, 10" inputmode="decimal" autocomplete="off"></div>
     </section>
 
     <section>
@@ -384,6 +393,7 @@ function trackAt(s) {
     'uniform vec3 uLampL; uniform vec3 uLampR; uniform mat3 uW2V; uniform vec2 uAim; uniform vec2 uOn; uniform vec2 uGrid;',
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
     'uniform vec3 uAlbedo;',
+    'uniform float uIso[8]; uniform float uIsoN;',
     'uniform sampler2D uShadowMap; uniform mat4 uShadowMat; uniform float uShadowOn; uniform vec2 uShadowNF; uniform vec2 uShadowPx;',
     'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv; varying vec2 vTrack;',
     'const float PI = 3.14159265;',
@@ -427,6 +437,7 @@ function trackAt(s) {
     '  vec3 N = normalize(vWN); if (!isGround && !gl_FrontFacing) N = -N;',
     '  float ep = 0.0; float es = 0.0;',
     '  lamp(uLampL, uLBL, uHBL, N, ep, es); lamp(uLampR, uLBR, uHBR, N, ep, es);',
+    '  float esRaw = es;',                               // illuminance before shadows, for the isolux lines
     '  float sh = shade(); ep *= sh; es *= sh;',
     '  vec3 alb = uAlbedo; float retro = uRetro; vec3 rc = vec3(1.0); float mark = 0.0;',
     '  if (isGround) {',
@@ -457,6 +468,15 @@ function trackAt(s) {
     '    vec3 lum = alb*(es/PI) + rc*retro*ep + alb*0.004;',   // cd/m2; last term is faint night-sky ambient
     '    col = pow(vec3(1.0) - exp(-lum*uExposure), vec3(1.0/2.2));',
     '  }',
+    '  if (isGround && uIsoN > 0.5) {',                 // isolux lines: contours of ground illuminance, about 1 px wide
+    '    float v = log(max(esRaw, 1e-6)); float fw = max(fwidth(v), 1e-5);',
+    '    for (int i = 0; i < 8; i++) { if (float(i) < uIsoN) {',
+    '      float lv = log(uIso[i]);',
+    '      float a = 1.0 - smoothstep(0.8, 1.8, abs(v - lv)/fw);',
+    '      vec3 lc = uMode > 0.5 ? vec3(1.0) : ramp(clamp((lv/log(10.0) + 1.0)/3.0, 0.0, 1.0));',
+    '      col = mix(col, lc, a*0.85);',
+    '    } }',
+    '  }',
     '  gl_FragColor = vec4(col, 1.0);',
     '}'
   ].join('\n');
@@ -467,6 +487,7 @@ function trackAt(s) {
     uW2V: { value: new THREE.Matrix3() }, uAim: { value: new THREE.Vector2(0, 0) }, uOn: { value: new THREE.Vector2(1, 0) },
     uGrid: { value: new THREE.Vector2(GRID.NH, GRID.NV) },
     uExposure: { value: 1 }, uMode: { value: 0 }, uRoadW: { value: 7 },
+    uIso: { value: [1, 1, 1, 1, 1, 1, 1, 1] }, uIsoN: { value: 0 },
     uShadowMap: { value: null }, uShadowMat: { value: new THREE.Matrix4() }, uShadowOn: { value: 0 },
     uShadowNF: { value: new THREE.Vector2(0.8, 500) }, uShadowPx: { value: new THREE.Vector2(1 / 2048, 1 / 1024) }
   };
@@ -586,7 +607,13 @@ function trackAt(s) {
 
   // distance markers: an unlit overlay that rides ahead of the car at fixed distances from the lamps
   var markers = new THREE.Group(), markerList = [];
-  [25, 50, 75, 100, 150, 200].forEach(function (d) {
+  function buildMarkers(list) {
+    markerList.forEach(function (grp) {
+      var u = grp.userData; u.line.geometry.dispose(); u.line.material.dispose();
+      u.lab.geometry.dispose(); u.lab.material.map.dispose(); u.lab.material.dispose(); markers.remove(grp);
+    });
+    markerList = [];
+    list.forEach(function (d) {
     var c = document.createElement('canvas'); c.width = 256; c.height = 128; var g2 = c.getContext('2d');
     g2.clearRect(0, 0, 256, 128); g2.fillStyle = '#f2b84b'; g2.font = 'bold 76px sans-serif'; g2.textAlign = 'center'; g2.textBaseline = 'middle';
     g2.fillText(d + ' m', 128, 68);
@@ -595,7 +622,8 @@ function trackAt(s) {
     line.rotation.x = -Math.PI / 2; line.position.y = 0.03;
     var lab = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, side: THREE.DoubleSide }));
     grp.add(line); grp.add(lab); grp.userData = { d: d, line: line, lab: lab }; markers.add(grp); markerList.push(grp);
-  });
+    });
+  }
   scene.add(markers);
   function placeMarkers() {
     markers.visible = $('markers').checked; if (!markers.visible) return;
@@ -715,6 +743,36 @@ function trackAt(s) {
   ['roadW', 'lampH', 'lampS', 'eyeH', 'eyeB', 'eyeL', 'aimV', 'exposure', 'speed'].forEach(function (id) { $(id).addEventListener('input', readInputs); });
   $('flipH').addEventListener('change', function () { cfg.flip = this.checked; rebuildBeams(); });
 
+  // comma separated number lists; the box is rewritten with what was understood
+  function parseList(id, lo, hi, max) {
+    var seen = {}, out = [];
+    String($(id).value).split(/[,;\s]+/).forEach(function (t) {
+      var v = parseFloat(t); if (!isFinite(v) || v < lo || v > hi || seen[v]) return; seen[v] = 1; out.push(v);
+    });
+    out.sort(function (a, b) { return a - b; }); out = out.slice(0, max);
+    $(id).value = out.join(', ');
+    return out;
+  }
+  function applyMarkers() { buildMarkers(parseList('markerList', 1, 500, 12)); }
+  function rampCss(t) {              // same colour scale as the shader
+    var st = [[27, 42, 140], [23, 166, 196], [53, 182, 87], [242, 209, 58], [232, 64, 42]];
+    t = Math.min(1, Math.max(0, t)) * 4; var i = Math.min(3, Math.floor(t)), f = t - i;
+    return 'rgb(' + [0, 1, 2].map(function (k) { return Math.round(st[i][k] + (st[i + 1][k] - st[i][k]) * f); }).join(',') + ')';
+  }
+  function applyIso() {
+    var list = parseList('isoList', 0.001, 100000, 8), on = $('isoOn').checked && list.length > 0;
+    for (var i = 0; i < 8; i++) shared.uIso.value[i] = i < list.length ? list[i] : 1;
+    shared.uIsoN.value = on ? list.length : 0;
+    var key = $('isoKey'); key.hidden = !on; key.textContent = '';
+    list.slice().reverse().forEach(function (v) {
+      var row = document.createElement('span'), chip = document.createElement('i');
+      chip.style.background = rampCss((Math.log(v) / Math.LN10 + 1) / 3); row.appendChild(chip);
+      row.appendChild(document.createTextNode(v + ' lx')); key.appendChild(row);
+    });
+  }
+  $('markerList').addEventListener('change', applyMarkers);
+  $('isoList').addEventListener('change', applyIso); $('isoOn').addEventListener('change', applyIso);
+
   function seg(id, fn) {
     var box = $(id);
     box.addEventListener('click', function (e) {
@@ -830,7 +888,7 @@ function trackAt(s) {
     requestAnimationFrame(frame);
   }
 
-  resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
+  applyMarkers(); applyIso(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
   requestAnimationFrame(frame);
 })();
 </script>
