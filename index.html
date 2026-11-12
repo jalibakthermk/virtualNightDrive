@@ -111,6 +111,8 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
       <div class="row"><label for="exposure">Exposure <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
       <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0">
+      <label class="check"><input type="checkbox" id="shadows" checked> Shadows from trees, posts and signs</label>
+      <label class="check"><input type="checkbox" id="markers" checked> Distance markers</label>
     </section>
 
     <section>
@@ -145,7 +147,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <input type="range" id="speed" min="0" max="130" step="5" value="60">
       <label class="check"><input type="checkbox" id="auto" checked> Lane keeping</label>
       <button class="btn" id="btnReset">Back to lane</button>
-      <p class="note"><kbd>W</kbd> <kbd>S</kbd> speed, <kbd>A</kbd> <kbd>D</kbd> steer, <kbd>H</kbd> high beam, <kbd>C</kbd> lux view, <kbd>V</kbd> camera, <kbd>Space</kbd> pause.</p>
+      <p class="note"><kbd>W</kbd> <kbd>S</kbd> speed, <kbd>A</kbd> <kbd>D</kbd> steer, <kbd>H</kbd> high beam, <kbd>C</kbd> lux view, <kbd>V</kbd> camera, <kbd>M</kbd> markers, <kbd>Space</kbd> pause.</p>
     </section>
   </div>
 </div>
@@ -291,6 +293,34 @@ function roadIlluminance(dist, lat, cfg, grids) {
   });
   return E;
 }
+
+// ---------- Track ----------
+// One period of straights and curves, repeated for ever. Each entry is [length m, heading change rad (+ right)].
+// Heading changes sum to zero, so the road meanders without ever looping back on itself.
+// Curvature ramps in and out linearly over RAMP metres (a clothoid transition).
+var TRACK = (function () {
+  var segs = [[250, 0], [200, 0.667], [120, 0], [180, -0.9], [150, 0], [160, 0.8], [100, 0], [142, -0.567], [200, 0]], RAMP = 40;
+  var P = 0; segs.forEach(function (g) { P += g[0]; });
+  var x = new Float64Array(P + 1), z = new Float64Array(P + 1), th = new Float64Array(P + 1);
+  var i = 0, X = 0, Z = 0, T = 0;
+  segs.forEach(function (g) {
+    var kmax = g[1] / (g[0] - RAMP);
+    for (var j = 0; j < g[0]; j++) {
+      var u = j + 0.5, k = kmax * Math.min(1, u / RAMP, (g[0] - u) / RAMP), tm = T + k * 0.5;
+      X += Math.sin(tm); Z -= Math.cos(tm); T += k; i++; x[i] = X; z[i] = Z; th[i] = T;
+    }
+  });
+  return { P: P, x: x, z: z, th: th };
+})();
+// Centreline position and heading at arc length s (heading 0 = along -Z, positive = turning right).
+function trackAt(s) {
+  var P = TRACK.P, n = Math.floor(s / P), r = s - n * P, i = Math.min(Math.floor(r), P - 1), f = r - i;
+  return {
+    x: TRACK.x[i] + (TRACK.x[i + 1] - TRACK.x[i]) * f + n * TRACK.x[P],
+    z: TRACK.z[i] + (TRACK.z[i + 1] - TRACK.z[i]) * f + n * TRACK.z[P],
+    th: TRACK.th[i] + (TRACK.th[i + 1] - TRACK.th[i]) * f
+  };
+}
 //</core>
 
 // ---------- Scene ----------
@@ -312,8 +342,9 @@ function roadIlluminance(dist, lat, cfg, grids) {
   var camera = new THREE.PerspectiveCamera(50, 1, 0.3, 1500);
 
   var VERT = [
-    'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv;',
-    'void main(){ vec4 wp = modelMatrix * vec4(position,1.0); vWP = wp.xyz; vWN = mat3(modelMatrix) * normal; vUv = uv;',
+    'attribute vec2 aTrack;',
+    'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv; varying vec2 vTrack;',
+    'void main(){ vec4 wp = modelMatrix * vec4(position,1.0); vWP = wp.xyz; vWN = mat3(modelMatrix) * normal; vUv = uv; vTrack = aTrack;',
     '  gl_Position = projectionMatrix * viewMatrix * wp; }'
   ].join('\n');
 
@@ -323,7 +354,8 @@ function roadIlluminance(dist, lat, cfg, grids) {
     'uniform vec3 uLampL; uniform vec3 uLampR; uniform mat3 uW2V; uniform vec2 uAim; uniform vec2 uOn; uniform vec2 uGrid;',
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
     'uniform vec3 uAlbedo;',
-    'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv;',
+    'uniform sampler2D uShadowMap; uniform mat4 uShadowMat; uniform float uShadowOn; uniform vec2 uShadowNF; uniform vec2 uShadowPx;',
+    'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv; varying vec2 vTrack;',
     'const float PI = 3.14159265;',
     'float tx(sampler2D t, float i, float j){ return texture2D(t, vec2((i+0.5)/uGrid.x, (j+0.5)/uGrid.y)).r; }',
     'float lampI(sampler2D t, vec3 dv){',
@@ -349,16 +381,30 @@ function roadIlluminance(dist, lat, cfg, grids) {
     '  if (t < 0.25) return mix(c0,c1,t*4.0); if (t < 0.5) return mix(c1,c2,(t-0.25)*4.0);',
     '  if (t < 0.75) return mix(c2,c3,(t-0.5)*4.0); return mix(c3,c4,(t-0.75)*4.0);',
     '}',
+    'float linD(float d){ return uShadowNF.x*uShadowNF.y / (uShadowNF.y - d*(uShadowNF.y-uShadowNF.x)); }',
+    'float tap(vec2 uv, float lim){ return linD(texture2D(uShadowMap, uv).r) < lim ? 0.0 : 1.0; }',
+    'float shade(){',                                   // 1 = lit, 0 = in shadow; one map shared by both lamps
+    '  if (uShadowOn < 0.5) return 1.0;',
+    '  vec4 sc = uShadowMat * vec4(vWP,1.0);',
+    '  if (sc.w <= 0.0) return 1.0;',
+    '  vec3 p = sc.xyz/sc.w*0.5 + 0.5;',
+    '  if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;',
+    '  float me = linD(p.z); float lim = me - (0.12 + 0.012*me); vec2 o = uShadowPx*0.5;',
+    '  return 0.25*(tap(p.xy+vec2(o.x,o.y),lim) + tap(p.xy+vec2(-o.x,o.y),lim) + tap(p.xy+vec2(o.x,-o.y),lim) + tap(p.xy+vec2(-o.x,-o.y),lim));',
+    '}',
     'void main(){',
-    '  vec3 N = normalize(vWN); if (!gl_FrontFacing) N = -N;',
+    '  bool isGround = uKind < 0.5 || uKind > 1.5;',
+    '  vec3 N = normalize(vWN); if (!isGround && !gl_FrontFacing) N = -N;',
     '  float ep = 0.0; float es = 0.0;',
     '  lamp(uLampL, uLBL, uHBL, N, ep, es); lamp(uLampR, uLBR, uHBR, N, ep, es);',
+    '  float sh = shade(); ep *= sh; es *= sh;',
     '  vec3 alb = uAlbedo; float retro = uRetro; vec3 rc = vec3(1.0); float mark = 0.0;',
-    '  if (uKind < 0.5) {',
-    '    float x = vWP.x; float s = -vWP.z; float ax = abs(x); float hw = uRoadW*0.5;',
+    '  if (isGround) {',
+    '    float x = vTrack.x; float s = vTrack.y; float ax = abs(x); float hw = uRoadW*0.5;',   // metres across and along the road
     '    float fwx = fwidth(x); float fws = fwidth(s);',
-    '    float n = mix(hash(floor(vec2(x,s)*5.0)), 0.5, clamp(fws*5.0,0.0,1.0));',
-    '    if (ax < hw) {',
+    '    float fwn = max(fwidth(vWP.x), fwidth(vWP.z));',
+    '    float n = mix(hash(floor(vWP.xz*5.0)), 0.5, clamp(fwn*5.0,0.0,1.0));',
+    '    if (uKind < 0.5 && ax < hw) {',
     '      float edge = 1.0 - smoothstep(0.075-fwx, 0.075+fwx, abs(ax-(hw-0.20)));',
     '      float dash = mix(step(mod(s,12.0),4.0), 0.333, clamp(fws/6.0,0.0,1.0));',
     '      float centre = (1.0 - smoothstep(0.06-fwx, 0.06+fwx, ax)) * dash;',
@@ -390,12 +436,14 @@ function roadIlluminance(dist, lat, cfg, grids) {
     uLampL: { value: new THREE.Vector3() }, uLampR: { value: new THREE.Vector3() },
     uW2V: { value: new THREE.Matrix3() }, uAim: { value: new THREE.Vector2(0, 0) }, uOn: { value: new THREE.Vector2(1, 0) },
     uGrid: { value: new THREE.Vector2(GRID.NH, GRID.NV) },
-    uExposure: { value: 1 }, uMode: { value: 0 }, uRoadW: { value: 7 }
+    uExposure: { value: 1 }, uMode: { value: 0 }, uRoadW: { value: 7 },
+    uShadowMap: { value: null }, uShadowMat: { value: new THREE.Matrix4() }, uShadowOn: { value: 0 },
+    uShadowNF: { value: new THREE.Vector2(0.8, 500) }, uShadowPx: { value: new THREE.Vector2(1 / 2048, 1 / 1024) }
   };
   function mat(o) {
     return new THREE.ShaderMaterial({
       uniforms: Object.assign({}, shared, {
-        uKind: { value: o.kind === 0 ? 0 : 1 }, uAlbedo: { value: new THREE.Vector3(o.albedo[0], o.albedo[1], o.albedo[2]) },
+        uKind: { value: o.kind === undefined ? 1 : o.kind }, uAlbedo: { value: new THREE.Vector3(o.albedo[0], o.albedo[1], o.albedo[2]) },
         uRetro: { value: o.retro || 0 }, uMap: { value: o.map || null }, uHasMap: { value: o.map ? 1 : 0 }
       }),
       vertexShader: VERT, fragmentShader: FRAG, side: THREE.DoubleSide, extensions: { derivatives: true }
@@ -403,9 +451,31 @@ function roadIlluminance(dist, lat, cfg, grids) {
   }
 
   // ground: one big plane that follows the car; road, markings and verge are drawn in the shader
-  var groundGeo = new THREE.PlaneGeometry(800, 1400); groundGeo.rotateX(-Math.PI / 2);
-  var ground = new THREE.Mesh(groundGeo, mat({ kind: 0, albedo: [0.08, 0.08, 0.08] }));
-  ground.frustumCulled = false; scene.add(ground);
+  var farGeo = new THREE.PlaneGeometry(3000, 3000); farGeo.rotateX(-Math.PI / 2);
+  var farMat = mat({ kind: 2, albedo: [0.05, 0.07, 0.04] }); farMat.polygonOffset = true; farMat.polygonOffsetFactor = 2; farMat.polygonOffsetUnits = 2;
+  var farG = new THREE.Mesh(farGeo, farMat); farG.frustumCulled = false; scene.add(farG);   // distant grass under everything
+
+  // road ribbon: a strip 60 m wide that follows the track centreline; aTrack carries (metres across, metres along)
+  var RN = 400, RSTEP = 2, RHALF = 30, ribBase = null;
+  var ribPos = new Float32Array((RN + 1) * 6), ribNor = new Float32Array((RN + 1) * 6), ribTrk = new Float32Array((RN + 1) * 4), ribIdx = [];
+  for (var ri = 0; ri <= RN; ri++) {
+    ribNor[ri * 6 + 1] = 1; ribNor[ri * 6 + 4] = 1;
+    if (ri < RN) { var ra = ri * 2; ribIdx.push(ra, ra + 1, ra + 3, ra, ra + 3, ra + 2); }
+  }
+  var ribGeo = new THREE.BufferGeometry();
+  var ribPosA = new THREE.BufferAttribute(ribPos, 3), ribTrkA = new THREE.BufferAttribute(ribTrk, 2);
+  ribGeo.setAttribute('position', ribPosA); ribGeo.setAttribute('normal', new THREE.BufferAttribute(ribNor, 3));
+  ribGeo.setAttribute('aTrack', ribTrkA); ribGeo.setIndex(ribIdx);
+  var ribbon = new THREE.Mesh(ribGeo, mat({ kind: 0, albedo: [0.08, 0.08, 0.08] })); ribbon.frustumCulled = false; scene.add(ribbon);
+  function updateRibbon() {
+    var base = Math.floor((car.s - 60) / 20) * 20; if (base === ribBase) return; ribBase = base;
+    for (var i = 0; i <= RN; i++) {
+      var s = base + i * RSTEP, t = trackAt(s), rx = Math.cos(t.th) * RHALF, rz = Math.sin(t.th) * RHALF, a = i * 6, b = i * 4;
+      ribPos[a] = t.x - rx; ribPos[a + 1] = 0; ribPos[a + 2] = t.z - rz; ribPos[a + 3] = t.x + rx; ribPos[a + 4] = 0; ribPos[a + 5] = t.z + rz;
+      ribTrk[b] = -RHALF; ribTrk[b + 1] = s; ribTrk[b + 2] = RHALF; ribTrk[b + 3] = s;
+    }
+    ribPosA.needsUpdate = true; ribTrkA.needsUpdate = true;
+  }
 
   // roadside objects recycle along the road every POOL metres
   var POOL = 600, objs = [];
@@ -461,14 +531,68 @@ function roadIlluminance(dist, lat, cfg, grids) {
   var body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 4.4), new THREE.MeshBasicMaterial({ color: 0x2a3140 }));
   body.visible = false; scene.add(body);
 
+  // distance markers: an unlit overlay that rides ahead of the car at fixed distances from the lamps
+  var markers = new THREE.Group(), markerList = [];
+  [25, 50, 75, 100, 150, 200].forEach(function (d) {
+    var c = document.createElement('canvas'); c.width = 256; c.height = 128; var g2 = c.getContext('2d');
+    g2.clearRect(0, 0, 256, 128); g2.fillStyle = '#f2b84b'; g2.font = 'bold 76px sans-serif'; g2.textAlign = 'center'; g2.textBaseline = 'middle';
+    g2.fillText(d + ' m', 128, 68);
+    var grp = new THREE.Group();
+    var line = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.2), new THREE.MeshBasicMaterial({ color: 0xf2b84b, transparent: true, opacity: 0.75, depthWrite: false, side: THREE.DoubleSide }));
+    line.rotation.x = -Math.PI / 2; line.position.y = 0.03;
+    var lab = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.8), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+    grp.add(line); grp.add(lab); grp.userData = { d: d, line: line, lab: lab }; markers.add(grp); markerList.push(grp);
+  });
+  scene.add(markers);
+  function placeMarkers() {
+    markers.visible = $('markers').checked; if (!markers.visible) return;
+    var near = cfg.side === 'RHT' ? 1 : -1;
+    markerList.forEach(function (grp) {
+      var u = grp.userData, t = trackAt(car.s + u.d), k = Math.max(1, u.d / 40);
+      grp.position.set(t.x, 0, t.z); grp.rotation.y = -t.th;
+      u.line.scale.x = cfg.roadW; u.lab.scale.set(k, k, 1); u.lab.position.set(near * (cfg.roadW / 2 + 0.6 + 0.8 * k), 0.5 * k, 0);
+    });
+  }
+
+  // shadows: a depth map rendered from the midpoint between the two lamps
+  var shadowCam = new THREE.PerspectiveCamera(70, 2, 0.8, 500), shadowRT = null, depthMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  try {
+    shadowRT = new THREE.WebGLRenderTarget(2048, 1024);
+    shadowRT.texture.minFilter = shadowRT.texture.magFilter = THREE.NearestFilter; shadowRT.texture.generateMipmaps = false;
+    shadowRT.depthTexture = new THREE.DepthTexture(2048, 1024);
+    shadowRT.depthTexture.type = THREE.UnsignedIntType;
+    shadowRT.depthTexture.minFilter = shadowRT.depthTexture.magFilter = THREE.NearestFilter;
+    shared.uShadowMap.value = shadowRT.depthTexture;
+  } catch (e) { shadowRT = null; }
+  function renderShadows() {
+    var on = !!shadowRT && $('shadows').checked; shared.uShadowOn.value = on ? 1 : 0; if (!on) return;
+    shadowCam.position.set(car.x, cfg.lampH, car.z); tmp.copy(shadowCam.position).add(fwd); shadowCam.lookAt(tmp);
+    shadowCam.updateMatrixWorld(); shadowCam.matrixWorldInverse.copy(shadowCam.matrixWorld).invert();
+    shared.uShadowMat.value.multiplyMatrices(shadowCam.projectionMatrix, shadowCam.matrixWorldInverse);
+    var bv = body.visible, mv = markers.visible;
+    ribbon.visible = farG.visible = body.visible = markers.visible = false;      // only roadside objects cast shadows
+    scene.overrideMaterial = depthMat; renderer.setRenderTarget(shadowRT); renderer.render(scene, shadowCam);
+    renderer.setRenderTarget(null); scene.overrideMaterial = null;
+    ribbon.visible = farG.visible = true; body.visible = bv; markers.visible = mv;
+  }
+
   // ---------- State ----------
   var cfg = { side: 'RHT', roadW: 7, lampH: 0.7, spacing: 1.2, eyeH: 1.2, eyeB: 2, eyeL: -0.37, aimV: 0, lb: true, hb: false, flip: false };
-  var car = { x: 1.75, z: 0, psi: 0, v: 0 };
+  var car = { x: 1.75, z: 0, psi: 0, v: 0, s: 0, lat: 1.75 };   // s, lat = position along and across the track
   var view = 'driver', paused = window.matchMedia('(prefers-reduced-motion: reduce)').matches, steer = 0, keys = {};
   var files = { lbL: null, lbR: null, hbL: null, hbR: null };   // parsed IES + name
   var grids = {}, texCache = [];
 
-  function laneX() { return (cfg.side === 'RHT' ? 1 : -1) * cfg.roadW / 4; }
+  function laneLat() { return (cfg.side === 'RHT' ? 1 : -1) * cfg.roadW / 4; }
+  function resetCar() {
+    var t = trackAt(car.s), l = laneLat();
+    car.x = t.x + Math.cos(t.th) * l; car.z = t.z + Math.sin(t.th) * l; car.psi = t.th; car.lat = l;
+  }
+  function projectCar() {          // find where the car is along and across the track
+    var t;
+    for (var i = 0; i < 2; i++) { t = trackAt(car.s); car.s += (car.x - t.x) * Math.sin(t.th) - (car.z - t.z) * Math.cos(t.th); }
+    t = trackAt(car.s); car.lat = (car.x - t.x) * Math.cos(t.th) + (car.z - t.z) * Math.sin(t.th);
+  }
 
   function makeTex(g) {
     var t = new THREE.DataTexture(g, GRID.NH, GRID.NV, THREE.RedFormat, THREE.FloatType);
@@ -510,12 +634,12 @@ function roadIlluminance(dist, lat, cfg, grids) {
   }
 
   function placeObjects() {
-    var carS = -car.z, near = cfg.side === 'RHT' ? 1 : -1;
+    var near = cfg.side === 'RHT' ? 1 : -1;
     for (var i = 0; i < objs.length; i++) {
       var u = objs[i].userData;
-      var s = u.s + POOL * Math.ceil((carS - 40 - u.s) / POOL);
-      var sd = u.side === 0 ? near : u.side;
-      objs[i].position.set(sd * (cfg.roadW / 2 + u.off), 0, -s);
+      var s = u.s + POOL * Math.ceil((car.s - 40 - u.s) / POOL);
+      var t = trackAt(s), lat = (u.side === 0 ? near : u.side) * (cfg.roadW / 2 + u.off);
+      objs[i].position.set(t.x + Math.cos(t.th) * lat, 0, t.z + Math.sin(t.th) * lat); objs[i].rotation.y = -t.th;
     }
   }
 
@@ -548,7 +672,7 @@ function roadIlluminance(dist, lat, cfg, grids) {
   seg('segSide', function (v) {
     cfg.side = v;
     var e = Math.abs(num('eyeL', -1, 1, 0.37)); $('eyeL').value = (v === 'RHT' ? -e : e).toFixed(2);   // driver sits on the offside
-    car.x = laneX(); car.psi = 0;
+    resetCar();
     readInputs(); rebuildBeams();
   });
 
@@ -560,7 +684,7 @@ function roadIlluminance(dist, lat, cfg, grids) {
   $('btnHigh').addEventListener('click', function () { setBeam('hb', !cfg.hb); });
   function setPaused(p) { paused = p; $('btnPause').textContent = p ? 'Drive' : 'Pause'; }
   $('btnPause').addEventListener('click', function () { setPaused(!paused); });
-  $('btnReset').addEventListener('click', function () { car.x = laneX(); car.psi = 0; });
+  $('btnReset').addEventListener('click', resetCar);
 
   function manual() { $('auto').checked = false; }
   function hold(el, dir) {
@@ -578,6 +702,7 @@ function roadIlluminance(dist, lat, cfg, grids) {
     else if (k === 'h') setBeam('hb', !cfg.hb);
     else if (k === 'c') setMode(shared.uMode.value > 0.5 ? 0 : 1);
     else if (k === 'v') setView(view === 'driver' ? 'bird' : 'driver');
+    else if (k === 'm') $('markers').checked = !$('markers').checked;
     else if (k === ' ') { setPaused(!paused); e.preventDefault(); }
   });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
@@ -613,15 +738,19 @@ function roadIlluminance(dist, lat, cfg, grids) {
       var target = +$('speed').value / 3.6;
       car.v += (target - car.v) * Math.min(1, dt * 0.8);
       var st = steer + (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
-      if ($('auto').checked) car.psi += (Math.atan((laneX() - car.x) / 20) - car.psi) * Math.min(1, dt * 2);
-      else car.psi += st * 0.35 * Math.min(1, car.v / 5) * dt;
+      if ($('auto').checked) {          // steer at a point further along the lane
+        var a = trackAt(car.s + Math.min(22, Math.max(10, car.v * 0.6))), l = laneLat();
+        var dpsi = Math.atan2(a.x + Math.cos(a.th) * l - car.x, -(a.z + Math.sin(a.th) * l - car.z)) - car.psi;
+        car.psi += Math.atan2(Math.sin(dpsi), Math.cos(dpsi)) * Math.min(1, dt * 3);
+      } else car.psi += st * 0.35 * Math.min(1, car.v / 5) * dt;
       car.x += Math.sin(car.psi) * car.v * dt; car.z -= Math.cos(car.psi) * car.v * dt; driven += car.v * dt;
     }
+    projectCar();
     fwd.set(Math.sin(car.psi), 0, -Math.cos(car.psi)); right.set(Math.cos(car.psi), 0, Math.sin(car.psi));
     shared.uW2V.value.set(right.x, right.y, right.z, 0, 1, 0, fwd.x, fwd.y, fwd.z);
     shared.uLampL.value.set(car.x, cfg.lampH, car.z).addScaledVector(right, -cfg.spacing / 2);
     shared.uLampR.value.set(car.x, cfg.lampH, car.z).addScaledVector(right, cfg.spacing / 2);
-    ground.position.set(0, 0, car.z - 550);
+    farG.position.set(car.x, -0.05, car.z); updateRibbon(); placeMarkers();
     placeObjects();
     if (view === 'driver') {
       camera.up.set(0, 1, 0);
@@ -633,12 +762,13 @@ function roadIlluminance(dist, lat, cfg, grids) {
       body.position.set(car.x, 0.3, car.z).addScaledVector(fwd, -2.2); body.rotation.y = -car.psi;
     }
     $('hudSpeed').textContent = Math.round(car.v * 3.6);
-    $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.x - laneX() >= 0 ? '+' : '') + (car.x - laneX()).toFixed(2) + ' m from lane centre';
+    $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.lat - laneLat() >= 0 ? '+' : '') + (car.lat - laneLat()).toFixed(2) + ' m from lane centre';
+    renderShadows();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }
 
-  car.x = laneX(); setPaused(paused); readInputs(); rebuildBeams(); resize();
+  resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
   requestAnimationFrame(frame);
 })();
 </script>
