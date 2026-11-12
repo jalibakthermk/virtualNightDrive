@@ -318,6 +318,7 @@ function roadIlluminance(dist, lat, cfg, grids) {
   ].join('\n');
 
   var FRAG = [
+    'precision highp sampler2D;',   // phones default samplers to low precision, which crushes candela values to ~0
     'uniform sampler2D uLBL; uniform sampler2D uLBR; uniform sampler2D uHBL; uniform sampler2D uHBR; uniform sampler2D uMap;',
     'uniform vec3 uLampL; uniform vec3 uLampR; uniform mat3 uW2V; uniform vec2 uAim; uniform vec2 uOn; uniform vec2 uGrid;',
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
