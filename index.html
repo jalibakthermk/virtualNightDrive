@@ -500,6 +500,7 @@ function roadIlluminance(dist, lat, cfg, grids) {
   }
 
   function updateProbe() {
+    if (!grids.lbL) return;
     var html = '<b>Road illuminance ahead</b>';
     [25, 50, 75, 100].forEach(function (d) {
       var e = roadIlluminance(d, 0, cfg, grids);
