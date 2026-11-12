@@ -82,6 +82,8 @@ input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
 .isokey{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:100px;display:flex;flex-direction:column;gap:2px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;text-shadow:0 1px 3px #000}
 .isokey span{display:flex;align-items:center;gap:6px}
 .isokey i{display:block;width:14px;height:3px;border-radius:1px}
+.cockpit{position:absolute;inset:0;pointer-events:none}
+.cockpit svg{display:block;width:100%;height:100%}
 .fail{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--bad)}
 kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);border-radius:3px;padding:0 5px;font-size:12px}
 </style>
@@ -90,6 +92,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
 
 <div class="app">
   <div class="stage" id="stage">
+    <div class="cockpit" id="cockpit" hidden></div>
     <div class="hud">
       <div class="speed"><span id="hudSpeed">0</span><small>km/h</small></div>
       <div class="meta" id="hudMeta">0 m driven</div>
@@ -121,6 +124,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <h2>Display</h2>
       <div class="seg" id="segMode"><button data-v="0" aria-pressed="true">Night view</button><button data-v="1" aria-pressed="false">Illuminance (lx)</button></div>
       <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
+      <div class="seg" id="segCockpit"><button data-v="off" aria-pressed="false">No cockpit</button><button data-v="car" aria-pressed="true">Car</button><button data-v="truck" aria-pressed="false">Truck</button></div>
       <label class="check"><input type="checkbox" id="autoExp" checked> Auto exposure from eye adaptation</label>
       <div class="row"><span>Adaptation luminance</span><span class="val" id="adaptVal">&ndash;</span></div>
       <div class="row"><label for="exposure">Exposure trim <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
@@ -309,6 +313,37 @@ function roadIlluminance(dist, lat, cfg, grids) {
     E += I / d2 * (cfg.lampH / d);
   });
   return E;
+}
+
+// ---------- Cockpit overlay ----------
+// Flat silhouette of the cabin drawn over the driver view (1000 x 560 units, stretched to the stage).
+// Drawn for a left-hand-drive vehicle and mirrored for right-hand drive.
+function cockpitMarkup(type, rhd) {
+  var B = '#0b0d12', E = '#1e2530', W = '#141820', truck = type === 'truck';
+  var a = ' fill="' + B + '" stroke="' + E + '" stroke-width="1.5"', cx0 = truck ? 310 : 270, cx = rhd ? 1000 - cx0 : cx0, ty = truck ? 434 : 404;
+  var body = truck
+    ? '<path d="M0,0 L1000,0 L1000,78 C700,94 300,94 0,78 Z"' + a + '/>' +                                   // sun visor
+      '<path d="M0,0 L120,0 L86,476 L0,476 Z"' + a + '/><rect x="20" y="130" width="52" height="190" rx="10" fill="' + W + '" stroke="' + E + '"/>' +   // A-pillar, door mirror
+      '<path d="M1000,0 L956,0 L990,430 L1000,430 Z"' + a + '/>' +
+      '<path d="M0,476 C120,470 170,404 260,398 L1000,388 L1000,560 L0,560 Z"' + a + '/>' +                   // high, flat dashboard
+      '<rect x="640" y="352" width="120" height="44" rx="6"' + a + '/><rect x="800" y="364" width="92" height="32" rx="6"' + a + '/>' +   // devices on the dash top
+      '<rect x="215" y="406" width="190" height="42" rx="8" fill="#05070a"/>' +
+      '<ellipse cx="310" cy="600" rx="250" ry="130" fill="none" stroke="' + W + '" stroke-width="34"/>' +
+      '<ellipse cx="310" cy="600" rx="267" ry="147" fill="none" stroke="' + E + '" stroke-width="1.5"/>'
+    : '<rect x="0" y="0" width="1000" height="26" fill="' + B + '"/>' +                                       // roof header
+      '<path d="M0,0 L78,0 L30,452 L0,452 Z"' + a + '/><path d="M1000,0 L930,0 L986,440 L1000,440 Z"' + a + '/>' +   // A-pillars
+      '<rect x="452" y="26" width="150" height="40" rx="8"' + a + '/>' +                                      // interior mirror
+      '<path d="M0,452 C160,418 330,402 500,404 C700,406 860,420 1000,440 L1000,560 L0,560 Z"' + a + '/>' +   // dashboard
+      '<path d="M130,432 C150,362 390,362 410,428 Z"' + a + '/>' +                                            // instrument binnacle
+      '<rect x="195" y="380" width="150" height="36" rx="8" fill="#05070a"/>' +
+      '<ellipse cx="270" cy="580" rx="178" ry="150" fill="none" stroke="' + W + '" stroke-width="30"/>' +
+      '<ellipse cx="270" cy="580" rx="193" ry="165" fill="none" stroke="' + E + '" stroke-width="1.5"/>';
+  return '<svg id="ckSvg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" preserveAspectRatio="none">' +
+    '<g' + (rhd ? ' transform="translate(1000,0) scale(-1,1)"' : '') + '>' + body + '</g>' +
+    '<circle id="ckLow" cx="' + (cx - 56) + '" cy="' + (ty - 7) + '" r="6" fill="#3ddc84"/>' +               // low beam telltale (green)
+    '<circle id="ckHigh" cx="' + (cx + 56) + '" cy="' + (ty - 7) + '" r="6" fill="#4aa8ff"/>' +              // high beam telltale (blue)
+    '<text id="ckSpeed" x="' + cx + '" y="' + ty + '" text-anchor="middle" font-family="sans-serif" font-size="24" font-weight="700" fill="#f2b84b" opacity="0.85">0</text>' +
+    '</svg>';
 }
 
 // ---------- Eye adaptation ----------
@@ -789,11 +824,19 @@ function trackAt(s) {
   function setSeg(id, v) { Array.prototype.forEach.call($(id).children, function (c) { c.setAttribute('aria-pressed', c.dataset.v === v ? 'true' : 'false'); }); }
   function setMode(v) { shared.uMode.value = +v; $('legend').hidden = +v !== 1; setSeg('segMode', String(v)); }
   function setView(v) { view = v; body.visible = v === 'bird'; setSeg('segView', v); }
+  var cockpit = 'car', ckSpeed = null, ckLow = null, ckHigh = null;
+  function buildCockpit() {
+    var box = $('cockpit');
+    if (cockpit === 'off') { box.innerHTML = ''; ckSpeed = ckLow = ckHigh = null; return; }
+    box.innerHTML = cockpitMarkup(cockpit, cfg.side === 'LHT');
+    ckSpeed = document.getElementById('ckSpeed'); ckLow = document.getElementById('ckLow'); ckHigh = document.getElementById('ckHigh');
+  }
   seg('segMode', setMode); seg('segView', setView);
+  seg('segCockpit', function (v) { cockpit = v; buildCockpit(); });
   seg('segSide', function (v) {
     cfg.side = v;
     var e = Math.abs(num('eyeL', -1, 1, 0.37)); $('eyeL').value = (v === 'RHT' ? -e : e).toFixed(2);   // driver sits on the offside
-    resetCar();
+    resetCar(); buildCockpit();
     readInputs(); rebuildBeams();
   });
 
@@ -812,6 +855,7 @@ function trackAt(s) {
     renderer.render(scene, camera);                    // fresh frame, read back in the same task
     var src = renderer.domElement, c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
     var g = c.getContext('2d'); g.drawImage(src, 0, 0);
+    var finish = function () {
     var beams = [cfg.lb ? 'Low beam' : null, cfg.hb ? 'High beam' : null].filter(Boolean).join(' + ') || 'Lamps off';
     var lines = [
       'Virtual Driver \u00b7 ' + beams + ' \u00b7 ' + cfg.side + ' \u00b7 road ' + cfg.roadW.toFixed(1) + ' m \u00b7 lamps ' + cfg.lampH.toFixed(2) + ' m high, ' + cfg.spacing.toFixed(2) + ' m apart \u00b7 eye ' + cfg.eyeH.toFixed(2) + ' m',
@@ -842,6 +886,15 @@ function trackAt(s) {
         say('Download started: ' + name);
       }
     }, 'image/png');
+    };
+    var svgEl = document.getElementById('ckSvg');
+    if (svgEl && !$('cockpit').hidden && svgEl.cloneNode) {      // draw the cockpit overlay into the image too
+      var clone = svgEl.cloneNode(true); clone.setAttribute('width', c.width); clone.setAttribute('height', c.height);
+      var img = new Image();
+      img.onload = function () { g.drawImage(img, 0, 0, c.width, c.height); finish(); };
+      img.onerror = finish;
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+    } else finish();
   }
   $('btnSave').addEventListener('click', exportPng);
   $('btnPause').addEventListener('click', function () { setPaused(!paused); });
@@ -923,6 +976,8 @@ function trackAt(s) {
       body.position.set(car.x, 0.3, car.z).addScaledVector(fwd, -2.2); body.rotation.y = -car.psi;
     }
     $('hudSpeed').textContent = Math.round(car.v * 3.6);
+    $('cockpit').hidden = cockpit === 'off' || view !== 'driver';
+    if (ckSpeed) { ckSpeed.textContent = Math.round(car.v * 3.6); ckLow.setAttribute('opacity', cfg.lb ? 1 : 0.12); ckHigh.setAttribute('opacity', cfg.hb ? 1 : 0.12); }
     $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.lat - laneLat() >= 0 ? '+' : '') + (car.lat - laneLat()).toFixed(2) + ' m from lane centre';
     // exposure: the eye adapts to the lit road ahead, quickly when it gets brighter and slowly when it gets darker
     var Lw = adaptationLuminance(cfg, grids, cfg.roadW, car.lat);
@@ -934,7 +989,7 @@ function trackAt(s) {
     requestAnimationFrame(frame);
   }
 
-  applyMarkers(); applyIso(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
+  applyMarkers(); applyIso(); buildCockpit(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
   requestAnimationFrame(frame);
 })();
 </script>
