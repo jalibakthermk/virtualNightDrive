@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0}[hidden]{display:none!important}</style>
+<title>Virtual Driver</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap">
+<style>
+/* Layout: night road fills the stage; an instrument-style setup panel sits beside it (below it on a phone). */
+:root{
+  color-scheme:dark;
+  --bg:#070a10; --panel:#0d121b; --raise:#151c28; --line:#232d3d;
+  --fg:#dbe2ec; --muted:#8793a6;
+  --amber:#f2b84b; --low:#3ddc84; --high:#4aa8ff; --bad:#ff7a6b;
+  --text:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --cond:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--text);font-size:14px;line-height:1.4;overflow:hidden}
+*{box-sizing:border-box}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 340px;height:100%}
+.stage{position:relative;min-width:0;min-height:0;background:#04060b;overflow:hidden}
+.stage canvas{display:block;width:100%;height:100%}
+.panel{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;min-width:0;
+  padding-block:14px 24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:18px}
+@media (max-width:760px){
+  .app{grid-template-columns:minmax(0,1fr);grid-template-rows:44% minmax(0,1fr)}
+  .panel{border-left:0;border-top:1px solid var(--line)}
+}
+h1{font-family:var(--cond);font-weight:600;font-size:22px;letter-spacing:.02em;margin:0;line-height:1.1}
+.sub{color:var(--muted);margin:2px 0 0;font-size:13px}
+h2{font-family:var(--cond);font-weight:600;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin:0 0 8px}
+section{display:flex;flex-direction:column;gap:8px}
+.row{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:10px;align-items:center}
+.row label{color:var(--fg)}
+.row small{color:var(--muted)}
+input[type=number]{width:100%;background:var(--raise);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:6px 8px;font:inherit;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--amber)}
+input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg button{background:var(--raise);color:var(--muted);border:0;padding:8px 6px;font:inherit;font-weight:500;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed=true]{background:var(--amber);color:#1a1204}
+.check{display:flex;align-items:center;gap:8px}
+.slot{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;background:var(--raise);border:1px solid var(--line);border-radius:4px;padding:7px 8px}
+.slot b{font-weight:500;display:block}
+.slot span{color:var(--muted);font-size:12px;display:block;overflow-wrap:anywhere}
+.slot span.err{color:var(--bad)}
+.btn{background:transparent;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:6px 10px;font:inherit;cursor:pointer}
+.btn:hover{border-color:var(--amber)}
+.slot input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.note{color:var(--muted);font-size:12px;margin:0}
+.val{font-variant-numeric:tabular-nums;color:var(--muted);text-align:right}
+/* stage overlays */
+.hud{position:absolute;top:10px;left:max(12px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:6px;pointer-events:none;font-variant-numeric:tabular-nums}
+.speed{font-family:var(--cond);font-weight:600;font-size:34px;line-height:1;color:#fff;text-shadow:0 1px 4px #000}
+.speed small{font-size:14px;color:var(--muted);font-weight:500;margin-left:4px}
+.hud .meta{font-size:12px;color:var(--muted);text-shadow:0 1px 3px #000}
+.probe{position:absolute;top:10px;right:max(12px,env(safe-area-inset-right,0px));background:rgba(7,10,16,.72);border:1px solid var(--line);border-radius:4px;padding:6px 9px;font-size:12px;font-variant-numeric:tabular-nums;pointer-events:none}
+.probe b{display:block;font-family:var(--cond);letter-spacing:.1em;text-transform:uppercase;font-size:11px;color:var(--amber);font-weight:600;margin-bottom:2px}
+.probe div{display:flex;justify-content:space-between;gap:14px}
+.probe div span:last-child{color:#fff}
+.tell{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);display:flex;gap:8px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:calc(100% - 120px)}
+.tell button{background:rgba(7,10,16,.72);border:1px solid var(--line);color:var(--muted);border-radius:4px;padding:7px 11px;font:inherit;font-weight:500;cursor:pointer}
+.tell button[aria-pressed=true].lowb{color:var(--low);border-color:var(--low)}
+.tell button[aria-pressed=true].highb{color:var(--high);border-color:var(--high)}
+.tell button.plain{color:var(--fg)}
+.steer{position:absolute;bottom:10px;width:44px;height:44px;border-radius:50%;background:rgba(7,10,16,.72);border:1px solid var(--line);color:var(--fg);font-size:18px;cursor:pointer;touch-action:none;user-select:none}
+#steerL{left:max(12px,env(safe-area-inset-left,0px))}
+#steerR{right:max(12px,env(safe-area-inset-right,0px))}
+.legend{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:64px;width:150px;font-size:11px;color:var(--fg);font-variant-numeric:tabular-nums;pointer-events:none}
+.legend i{display:block;height:8px;border-radius:2px;background:linear-gradient(90deg,#1b2a8c,#17a6c4,#35b657,#f2d13a,#e8402a)}
+.legend div{display:flex;justify-content:space-between;margin-top:2px}
+.fail{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--bad)}
+kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);border-radius:3px;padding:0 5px;font-size:12px}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="stage" id="stage">
+    <div class="hud">
+      <div class="speed"><span id="hudSpeed">0</span><small>km/h</small></div>
+      <div class="meta" id="hudMeta">0 m driven</div>
+    </div>
+    <div class="probe" id="probe" aria-live="off"></div>
+    <div class="legend" id="legend" hidden><i></i><div><span>0.1</span><span>1</span><span>10</span><span>100 lx</span></div></div>
+    <button class="steer" id="steerL" aria-label="Steer left">&#9664;</button>
+    <button class="steer" id="steerR" aria-label="Steer right">&#9654;</button>
+    <div class="tell">
+      <button id="btnLow" class="lowb" aria-pressed="true">Low beam</button>
+      <button id="btnHigh" class="highb" aria-pressed="false">High beam</button>
+      <button id="btnPause" class="plain">Pause</button>
+    </div>
+    <div class="fail" id="fail" hidden></div>
+  </div>
+
+  <div class="panel">
+    <header>
+      <h1>Virtual Driver</h1>
+      <p class="sub">Night drive lit by your headlamp IES files.</p>
+    </header>
+
+    <section>
+      <h2>Display</h2>
+      <div class="seg" id="segMode"><button data-v="0" aria-pressed="true">Night view</button><button data-v="1" aria-pressed="false">Illuminance (lx)</button></div>
+      <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
+      <div class="row"><label for="exposure">Exposure <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
+      <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0">
+    </section>
+
+    <section>
+      <h2>Photometry</h2>
+      <div class="slot"><div><b>Low beam, left lamp</b><span id="lbL_s"></span></div><label class="btn" for="lbL_f">Load</label><button class="btn" data-clear="lbL" aria-label="Remove low beam left file">&times;</button><input type="file" id="lbL_f" data-slot="lbL"></div>
+      <div class="slot"><div><b>Low beam, right lamp</b><span id="lbR_s"></span></div><label class="btn" for="lbR_f">Load</label><button class="btn" data-clear="lbR" aria-label="Remove low beam right file">&times;</button><input type="file" id="lbR_f" data-slot="lbR"></div>
+      <div class="slot"><div><b>High beam, left lamp</b><span id="hbL_s"></span></div><label class="btn" for="hbL_f">Load</label><button class="btn" data-clear="hbL" aria-label="Remove high beam left file">&times;</button><input type="file" id="hbL_f" data-slot="hbL"></div>
+      <div class="slot"><div><b>High beam, right lamp</b><span id="hbR_s"></span></div><label class="btn" for="hbR_f">Load</label><button class="btn" data-clear="hbR" aria-label="Remove high beam right file">&times;</button><input type="file" id="hbR_f" data-slot="hbR"></div>
+      <p class="note">One file per function is enough: it is used for both lamps. With no file, a built-in demo beam is shown.</p>
+      <div class="row"><label for="aimV">Vertical aim offset <small>(&deg;, + up)</small></label><input type="number" id="aimV" value="0" step="0.1" min="-5" max="5"></div>
+      <label class="check"><input type="checkbox" id="flipH"> Mirror H axis of loaded files</label>
+    </section>
+
+    <section>
+      <h2>Vehicle</h2>
+      <div class="row"><label for="lampH">Lamp mounting height <small>(m)</small></label><input type="number" id="lampH" value="0.70" step="0.01" min="0.3" max="1.5"></div>
+      <div class="row"><label for="lampS">Lamp spacing, centre to centre <small>(m)</small></label><input type="number" id="lampS" value="1.20" step="0.01" min="0.4" max="2.4"></div>
+      <div class="row"><label for="eyeH">Eye height <small>(m)</small></label><input type="number" id="eyeH" value="1.20" step="0.01" min="0.8" max="3"></div>
+      <div class="row"><label for="eyeB">Eye behind lamps <small>(m)</small></label><input type="number" id="eyeB" value="2.00" step="0.05" min="0" max="6"></div>
+      <div class="row"><label for="eyeL">Eye lateral offset <small>(m, + right)</small></label><input type="number" id="eyeL" value="-0.37" step="0.01" min="-1" max="1"></div>
+    </section>
+
+    <section>
+      <h2>Road</h2>
+      <div class="seg" id="segSide"><button data-v="RHT" aria-pressed="true">RHT</button><button data-v="LHT" aria-pressed="false">LHT</button></div>
+      <div class="row"><label for="roadW">Road width, two lanes <small>(m)</small></label><input type="number" id="roadW" value="7.0" step="0.1" min="4" max="16"></div>
+    </section>
+
+    <section>
+      <h2>Driving</h2>
+      <div class="row"><label for="speed">Set speed</label><span class="val" id="speedVal">60 km/h</span></div>
+      <input type="range" id="speed" min="0" max="130" step="5" value="60">
+      <label class="check"><input type="checkbox" id="auto" checked> Lane keeping</label>
+      <button class="btn" id="btnReset">Back to lane</button>
+      <p class="note"><kbd>W</kbd> <kbd>S</kbd> speed, <kbd>A</kbd> <kbd>D</kbd> steer, <kbd>H</kbd> high beam, <kbd>C</kbd> lux view, <kbd>V</kbd> camera, <kbd>Space</kbd> pause.</p>
+    </section>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+//<core>
+// ---------- Photometry core (no DOM, no WebGL) ----------
+// Every beam is resampled to one regular grid in Type A style angles:
+// H = atan(x/z) from -90..+90 deg (+ right), V = asin(y) from -30..+30 deg (+ up).
+var GRID = { NH: 901, NV: 1201, H0: -90, H1: 90, V0: -30, V1: 30 };
+var D2R = Math.PI / 180;
+
+function parseIES(text) {
+  var lines = text.replace(/\r/g, '').split('\n');
+  var t = -1;
+  for (var i = 0; i < lines.length; i++) { if (/^\s*TILT\s*=/i.test(lines[i])) { t = i; break; } }
+  if (t < 0) throw new Error('No TILT line found. Is this an IES LM-63 file?');
+  var tilt = lines[t].split('=')[1].trim().toUpperCase();
+  var nums = lines.slice(t + 1).join(' ').split(/[\s,]+/).filter(function (s) { return s.length; }).map(Number);
+  var p = 0;
+  if (tilt === 'INCLUDE') { var n = nums[1]; p = 2 + 2 * n; }
+  var head = nums.slice(p, p + 13);
+  if (head.length < 13 || head.some(isNaN)) throw new Error('Header numbers are incomplete.');
+  var mult = head[2], nV = head[3], nH = head[4], type = head[5], ballast = head[10];
+  p += 13;
+  var need = nV + nH + nV * nH;
+  if (nums.length - p < need) throw new Error('Expected ' + need + ' angle and candela values, found ' + (nums.length - p) + '.');
+  var vA = nums.slice(p, p + nV); p += nV;
+  var hA = nums.slice(p, p + nH); p += nH;
+  var k = mult * (ballast > 0 ? ballast : 1);
+  var cd = new Float32Array(nV * nH), peak = 0;       // cd[h * nV + v]
+  for (var j = 0; j < nV * nH; j++) { var c = nums[p + j] * k; cd[j] = c; if (c > peak) peak = c; }
+  if (!(peak > 0)) throw new Error('All candela values are zero.');
+  return { type: type, vA: vA, hA: hA, nV: nV, nH: nH, cd: cd, peak: peak };
+}
+
+// position of x in ascending array a -> [index, fraction], or null when outside
+function locate(a, x) {
+  var n = a.length;
+  if (n === 1) return [0, 0];
+  if (x < a[0] - 1e-6 || x > a[n - 1] + 1e-6) return null;
+  var lo = 0, hi = n - 1;
+  while (hi - lo > 1) { var m = (lo + hi) >> 1; if (a[m] <= x) lo = m; else hi = m; }
+  var f = (x - a[lo]) / (a[hi] - a[lo] || 1);
+  return [lo, f < 0 ? 0 : f > 1 ? 1 : f];
+}
+
+function iesValue(ies, h, v) {
+  var a = locate(ies.hA, h), b = locate(ies.vA, v);
+  if (!a || !b) return 0;
+  var nV = ies.nV, i = a[0], j = b[0];
+  var i1 = Math.min(i + 1, ies.nH - 1), j1 = Math.min(j + 1, nV - 1);
+  var c = ies.cd;
+  var lo = c[i * nV + j] * (1 - b[1]) + c[i * nV + j1] * b[1];
+  var hi = c[i1 * nV + j] * (1 - b[1]) + c[i1 * nV + j1] * b[1];
+  return lo * (1 - a[1]) + hi * a[1];
+}
+
+// Resample an IES file to the common grid. flip mirrors the H axis.
+function gridFromIES(ies, flip) {
+  var g = new Float32Array(GRID.NH * GRID.NV);
+  var dH = (GRID.H1 - GRID.H0) / (GRID.NH - 1), dV = (GRID.V1 - GRID.V0) / (GRID.NV - 1);
+  var symAB = ies.hA[0] >= 0;
+  var hMax = ies.hA[ies.nH - 1];
+  for (var j = 0; j < GRID.NV; j++) {
+    var V = GRID.V0 + j * dV, sv = Math.sin(V * D2R), cv = Math.cos(V * D2R);
+    for (var i = 0; i < GRID.NH; i++) {
+      var H = GRID.H0 + i * dH; if (flip) H = -H;
+      var h, v;
+      if (ies.type === 3) { h = H; v = V; }                       // Type A
+      else {
+        var x = cv * Math.sin(H * D2R), y = sv, z = cv * Math.cos(H * D2R);
+        if (ies.type === 2) {                                       // Type B
+          h = Math.asin(x) / D2R; v = Math.atan2(y, z) / D2R;
+        } else {                                                    // Type C: polar axis down, C0 forward, C90 left
+          v = Math.acos(Math.max(-1, Math.min(1, -y))) / D2R;
+          h = Math.atan2(-x, z) / D2R; if (h < 0) h += 360;
+          if (ies.nH === 1) h = ies.hA[0];
+          else if (hMax <= 90.001) { h = h % 180; if (h > 90) h = 180 - h; }
+          else if (hMax <= 180.001) { if (h > 180) h = 360 - h; }
+        }
+      }
+      if (ies.type !== 1 && symAB) h = Math.abs(h);
+      g[j * GRID.NH + i] = iesValue(ies, h, v);
+    }
+  }
+  return g;
+}
+
+// Built-in demo beams (per lamp, cd). Not from any real lamp.
+function demoLow(side) {
+  var g = new Float32Array(GRID.NH * GRID.NV);
+  var dH = (GRID.H1 - GRID.H0) / (GRID.NH - 1), dV = (GRID.V1 - GRID.V0) / (GRID.NV - 1);
+  for (var j = 0; j < GRID.NV; j++) {
+    var V = GRID.V0 + j * dV;
+    for (var i = 0; i < GRID.NH; i++) {
+      var H = GRID.H0 + i * dH;
+      var hs = side === 'LHT' ? -H : H;                            // kink rises toward the nearside
+      var cut = -0.57 + (hs > 0 ? Math.min(hs * 0.268, 1.2) : 0); // 1 % cut-off with a 15 deg shoulder
+      var dv = V - cut;
+      var w = 1 / (1 + Math.exp(dv / 0.06));
+      var below = 21000 * Math.exp(-0.5 * (H / 9) * (H / 9)) * Math.exp(-0.5 * Math.pow((dv + 0.9) / 1.6, 2))
+                + 4500 * Math.exp(-0.5 * (H / 28) * (H / 28)) * Math.exp(Math.min(dv, 0) / 7);
+      var above = 220 * Math.exp(-0.5 * (H / 20) * (H / 20)) * Math.exp(-Math.max(dv, 0) / 4);
+      g[j * GRID.NH + i] = w * below + (1 - w) * above;
+    }
+  }
+  return g;
+}
+function demoHigh() {
+  var g = new Float32Array(GRID.NH * GRID.NV);
+  var dH = (GRID.H1 - GRID.H0) / (GRID.NH - 1), dV = (GRID.V1 - GRID.V0) / (GRID.NV - 1);
+  for (var j = 0; j < GRID.NV; j++) {
+    var V = GRID.V0 + j * dV;
+    for (var i = 0; i < GRID.NH; i++) {
+      var H = GRID.H0 + i * dH;
+      g[j * GRID.NH + i] = 42000 * Math.exp(-0.5 * (Math.pow(H / 5.5, 2) + Math.pow((V + 0.2) / 2.2, 2)))
+                         + 6000 * Math.exp(-0.5 * (Math.pow(H / 18, 2) + Math.pow((V + 1) / 5, 2)));
+    }
+  }
+  return g;
+}
+
+// Same lookup the shader does: bilinear in the common grid, clamped at the edges.
+function sampleGrid(g, H, V) {
+  var fx = Math.min(1, Math.max(0, (H - GRID.H0) / (GRID.H1 - GRID.H0))) * (GRID.NH - 1);
+  var fy = Math.min(1, Math.max(0, (V - GRID.V0) / (GRID.V1 - GRID.V0))) * (GRID.NV - 1);
+  var i = Math.min(Math.floor(fx), GRID.NH - 2), j = Math.min(Math.floor(fy), GRID.NV - 2);
+  var a = fx - i, b = fy - j, N = GRID.NH;
+  return (g[j * N + i] * (1 - a) + g[j * N + i + 1] * a) * (1 - b) + (g[(j + 1) * N + i] * (1 - a) + g[(j + 1) * N + i + 1] * a) * b;
+}
+
+// Horizontal illuminance (lx) on a flat road at `dist` m ahead of the lamps, `lat` m right of the vehicle centreline.
+function roadIlluminance(dist, lat, cfg, grids) {
+  var E = 0;
+  [[-cfg.spacing / 2, grids.lbL, grids.hbL], [cfg.spacing / 2, grids.lbR, grids.hbR]].forEach(function (L) {
+    var x = lat - L[0], y = -cfg.lampH, z = dist;
+    var d2 = x * x + y * y + z * z, d = Math.sqrt(d2);
+    var H = Math.atan2(x, z) / D2R, V = Math.asin(y / d) / D2R - cfg.aimV;
+    var I = (cfg.lb ? sampleGrid(L[1], H, V) : 0) + (cfg.hb ? sampleGrid(L[2], H, V) : 0);
+    E += I / d2 * (cfg.lampH / d);
+  });
+  return E;
+}
+//</core>
+
+// ---------- Scene ----------
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var stage = $('stage');
+  if (!window.THREE) { fail('The 3D library did not load. Check the network connection and reload.'); return; }
+
+  var renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true }); } catch (e) { fail('This browser could not start WebGL.'); return; }
+  if (!renderer.capabilities.isWebGL2) { fail('This tool needs WebGL 2, which this browser does not provide.'); return; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  stage.insertBefore(renderer.domElement, stage.firstChild);
+
+  function fail(msg) { var f = $('fail'); f.textContent = msg; f.hidden = false; }
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x04060b);
+  var camera = new THREE.PerspectiveCamera(50, 1, 0.3, 1500);
+
+  var VERT = [
+    'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv;',
+    'void main(){ vec4 wp = modelMatrix * vec4(position,1.0); vWP = wp.xyz; vWN = mat3(modelMatrix) * normal; vUv = uv;',
+    '  gl_Position = projectionMatrix * viewMatrix * wp; }'
+  ].join('\n');
+
+  var FRAG = [
+    'uniform sampler2D uLBL; uniform sampler2D uLBR; uniform sampler2D uHBL; uniform sampler2D uHBR; uniform sampler2D uMap;',
+    'uniform vec3 uLampL; uniform vec3 uLampR; uniform mat3 uW2V; uniform vec2 uAim; uniform vec2 uOn; uniform vec2 uGrid;',
+    'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
+    'uniform vec3 uAlbedo;',
+    'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv;',
+    'const float PI = 3.14159265;',
+    'float tx(sampler2D t, float i, float j){ return texture2D(t, vec2((i+0.5)/uGrid.x, (j+0.5)/uGrid.y)).r; }',
+    'float lampI(sampler2D t, vec3 dv){',
+    '  if (dv.z <= 0.0) return 0.0;',
+    '  float H = degrees(atan(dv.x, dv.z)) - uAim.x;',
+    '  float V = degrees(asin(clamp(dv.y,-1.0,1.0))) - uAim.y;',
+    '  float fx = clamp((H+90.0)/180.0,0.0,1.0)*(uGrid.x-1.0);',
+    '  float fy = clamp((V+30.0)/60.0,0.0,1.0)*(uGrid.y-1.0);',
+    '  float i0 = min(floor(fx), uGrid.x-2.0); float j0 = min(floor(fy), uGrid.y-2.0);',
+    '  float a = fx-i0; float b = fy-j0;',
+    '  return mix(mix(tx(t,i0,j0),tx(t,i0+1.0,j0),a), mix(tx(t,i0,j0+1.0),tx(t,i0+1.0,j0+1.0),a), b);',
+    '}',
+    'void lamp(vec3 pos, sampler2D lb, sampler2D hb, vec3 N, inout float ePerp, inout float eSurf){',
+    '  vec3 L = vWP - pos; float d2 = max(dot(L,L), 0.25); vec3 dir = L / sqrt(d2);',
+    '  float cosi = dot(N, -dir); if (cosi <= 0.0) return;',
+    '  vec3 dv = uW2V * dir;',
+    '  float I = uOn.x * lampI(lb, dv) + uOn.y * lampI(hb, dv);',
+    '  float e = I / d2; ePerp += e; eSurf += e * cosi;',
+    '}',
+    'float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }',
+    'vec3 ramp(float t){',
+    '  vec3 c0=vec3(0.106,0.165,0.549), c1=vec3(0.090,0.651,0.769), c2=vec3(0.208,0.714,0.341), c3=vec3(0.949,0.820,0.227), c4=vec3(0.910,0.251,0.165);',
+    '  if (t < 0.25) return mix(c0,c1,t*4.0); if (t < 0.5) return mix(c1,c2,(t-0.25)*4.0);',
+    '  if (t < 0.75) return mix(c2,c3,(t-0.5)*4.0); return mix(c3,c4,(t-0.75)*4.0);',
+    '}',
+    'void main(){',
+    '  vec3 N = normalize(vWN); if (!gl_FrontFacing) N = -N;',
+    '  float ep = 0.0; float es = 0.0;',
+    '  lamp(uLampL, uLBL, uHBL, N, ep, es); lamp(uLampR, uLBR, uHBR, N, ep, es);',
+    '  vec3 alb = uAlbedo; float retro = uRetro; vec3 rc = vec3(1.0); float mark = 0.0;',
+    '  if (uKind < 0.5) {',
+    '    float x = vWP.x; float s = -vWP.z; float ax = abs(x); float hw = uRoadW*0.5;',
+    '    float fwx = fwidth(x); float fws = fwidth(s);',
+    '    float n = mix(hash(floor(vec2(x,s)*5.0)), 0.5, clamp(fws*5.0,0.0,1.0));',
+    '    if (ax < hw) {',
+    '      float edge = 1.0 - smoothstep(0.075-fwx, 0.075+fwx, abs(ax-(hw-0.20)));',
+    '      float dash = mix(step(mod(s,12.0),4.0), 0.333, clamp(fws/6.0,0.0,1.0));',
+    '      float centre = (1.0 - smoothstep(0.06-fwx, 0.06+fwx, ax)) * dash;',
+    '      mark = clamp(edge+centre, 0.0, 1.0);',
+    '      alb = mix(vec3(0.08)*(0.8+0.4*n), vec3(0.5), mark);',
+    '      retro = mix(0.015, 0.15, mark);',            // R_L: asphalt ~15, marking ~150 mcd/m2/lx
+    '    } else {',
+    '      alb = vec3(0.045,0.07,0.035)*(0.6+0.8*n); retro = 0.004;',
+    '    }',
+    '  } else if (uHasMap > 0.5) {',
+    '    vec4 m = texture2D(uMap, vUv); if (m.a < 0.5) discard;',
+    '    vec3 c = pow(m.rgb, vec3(2.2)); alb = c*0.6; rc = c;',
+    '  }',
+    '  vec3 col;',
+    '  if (uMode > 0.5) {',
+    '    float t = (log(max(es,1e-6))/log(10.0) + 1.0) / 3.0;',
+    '    col = ramp(clamp(t,0.0,1.0)) * smoothstep(-0.25, 0.0, t) * (0.7 + 0.3*clamp(max(alb.r,max(alb.g,alb.b))*2.0,0.0,1.0));',
+    '    col = max(col, alb*0.25);',
+    '  } else {',
+    '    vec3 lum = alb*(es/PI) + rc*retro*ep + alb*0.004;',   // cd/m2; last term is faint night-sky ambient
+    '    col = pow(vec3(1.0) - exp(-lum*uExposure), vec3(1.0/2.2));',
+    '  }',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  var shared = {
+    uLBL: { value: null }, uLBR: { value: null }, uHBL: { value: null }, uHBR: { value: null },
+    uLampL: { value: new THREE.Vector3() }, uLampR: { value: new THREE.Vector3() },
+    uW2V: { value: new THREE.Matrix3() }, uAim: { value: new THREE.Vector2(0, 0) }, uOn: { value: new THREE.Vector2(1, 0) },
+    uGrid: { value: new THREE.Vector2(GRID.NH, GRID.NV) },
+    uExposure: { value: 1 }, uMode: { value: 0 }, uRoadW: { value: 7 }
+  };
+  function mat(o) {
+    return new THREE.ShaderMaterial({
+      uniforms: Object.assign({}, shared, {
+        uKind: { value: o.kind === 0 ? 0 : 1 }, uAlbedo: { value: new THREE.Vector3(o.albedo[0], o.albedo[1], o.albedo[2]) },
+        uRetro: { value: o.retro || 0 }, uMap: { value: o.map || null }, uHasMap: { value: o.map ? 1 : 0 }
+      }),
+      vertexShader: VERT, fragmentShader: FRAG, side: THREE.DoubleSide, extensions: { derivatives: true }
+    });
+  }
+
+  // ground: one big plane that follows the car; road, markings and verge are drawn in the shader
+  var groundGeo = new THREE.PlaneGeometry(800, 1400); groundGeo.rotateX(-Math.PI / 2);
+  var ground = new THREE.Mesh(groundGeo, mat({ kind: 0, albedo: [0.08, 0.08, 0.08] }));
+  ground.frustumCulled = false; scene.add(ground);
+
+  // roadside objects recycle along the road every POOL metres
+  var POOL = 600, objs = [];
+  function addObj(o, s, sideSign, off) { o.userData = { s: s, side: sideSign, off: off }; objs.push(o); scene.add(o); }
+
+  function signTexture(kind) {
+    var c = document.createElement('canvas'); c.width = c.height = 256; var g = c.getContext('2d');
+    g.clearRect(0, 0, 256, 256); g.textAlign = 'center'; g.textBaseline = 'middle';
+    if (kind === 0) {           // speed limit
+      g.fillStyle = '#d21f1f'; g.beginPath(); g.arc(128, 128, 124, 0, 7); g.fill();
+      g.fillStyle = '#fff'; g.beginPath(); g.arc(128, 128, 96, 0, 7); g.fill();
+      g.fillStyle = '#111'; g.font = 'bold 110px sans-serif'; g.fillText('80', 128, 136);
+    } else if (kind === 1) {    // warning triangle
+      g.fillStyle = '#d21f1f'; g.beginPath(); g.moveTo(128, 6); g.lineTo(252, 236); g.lineTo(4, 236); g.closePath(); g.fill();
+      g.fillStyle = '#fff'; g.beginPath(); g.moveTo(128, 56); g.lineTo(208, 210); g.lineTo(48, 210); g.closePath(); g.fill();
+      g.fillStyle = '#111'; g.font = 'bold 120px sans-serif'; g.fillText('!', 128, 150);
+    } else {                    // information panel
+      g.fillStyle = '#fff'; g.fillRect(0, 28, 256, 200); g.fillStyle = '#1456b8'; g.fillRect(10, 38, 236, 180);
+      g.fillStyle = '#fff'; g.font = 'bold 44px sans-serif'; g.fillText('TEST', 128, 100); g.fillText('TRACK', 128, 156);
+    }
+    return new THREE.CanvasTexture(c);
+  }
+
+  var mTrunk = mat({ albedo: [0.12, 0.09, 0.06] }), mLeaf = mat({ albedo: [0.04, 0.09, 0.03] });
+  var mPost = mat({ albedo: [0.6, 0.6, 0.6] }), mPole = mat({ albedo: [0.3, 0.3, 0.32] }), mRefl = mat({ albedo: [0.7, 0.7, 0.7], retro: 30 });
+  var mSigns = [0, 1, 2].map(function (k) { return mat({ albedo: [0.6, 0.6, 0.6], retro: 80, map: signTexture(k) }); });
+
+  var rnd = (function () { var a = 20261112; return function () { a = (a * 1664525 + 1013904223) >>> 0; return a / 4294967296; }; })();
+  var trunkGeo = new THREE.CylinderGeometry(0.14, 0.2, 3, 7), leafGeo = new THREE.ConeGeometry(1.7, 5.5, 8);
+  for (var i = 0; i < 70; i++) {
+    var t = new THREE.Group(), k = 0.7 + rnd() * 0.8;
+    var tr = new THREE.Mesh(trunkGeo, mTrunk); tr.position.y = 1.5; t.add(tr);
+    var lf = new THREE.Mesh(leafGeo, mLeaf); lf.position.y = 5.2; t.add(lf);
+    t.scale.set(k, k, k);
+    addObj(t, rnd() * POOL, rnd() < 0.5 ? -1 : 1, 3 + rnd() * 9);
+  }
+  var postGeo = new THREE.BoxGeometry(0.12, 1.0, 0.05), reflGeo = new THREE.PlaneGeometry(0.08, 0.18);
+  for (var s = 0; s < POOL; s += 50) {
+    [-1, 1].forEach(function (sd) {
+      var p = new THREE.Group();
+      var b = new THREE.Mesh(postGeo, mPost); b.position.y = 0.5; p.add(b);
+      var r = new THREE.Mesh(reflGeo, mRefl); r.position.set(0, 0.8, 0.03); p.add(r);
+      addObj(p, s + 10, sd, 0.6);
+    });
+  }
+  var poleGeo = new THREE.CylinderGeometry(0.04, 0.04, 2.4, 6), panelGeo = new THREE.PlaneGeometry(0.9, 0.9);
+  for (var q = 0; q < 4; q++) {
+    var sg = new THREE.Group();
+    var pl = new THREE.Mesh(poleGeo, mPole); pl.position.y = 1.2; sg.add(pl);
+    var pn = new THREE.Mesh(panelGeo, mSigns[q % 3]); pn.position.set(0, 2.1, 0.05); sg.add(pn);
+    addObj(sg, 80 + q * 150, 0, 1.6);      // side 0 = nearside of the traffic direction
+  }
+  var body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 4.4), new THREE.MeshBasicMaterial({ color: 0x2a3140 }));
+  body.visible = false; scene.add(body);
+
+  // ---------- State ----------
+  var cfg = { side: 'RHT', roadW: 7, lampH: 0.7, spacing: 1.2, eyeH: 1.2, eyeB: 2, eyeL: -0.37, aimV: 0, lb: true, hb: false, flip: false };
+  var car = { x: 1.75, z: 0, psi: 0, v: 0 };
+  var view = 'driver', paused = window.matchMedia('(prefers-reduced-motion: reduce)').matches, steer = 0, keys = {};
+  var files = { lbL: null, lbR: null, hbL: null, hbR: null };   // parsed IES + name
+  var grids = {}, texCache = [];
+
+  function laneX() { return (cfg.side === 'RHT' ? 1 : -1) * cfg.roadW / 4; }
+
+  function makeTex(g) {
+    var t = new THREE.DataTexture(g, GRID.NH, GRID.NV, THREE.RedFormat, THREE.FloatType);
+    t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true;
+    texCache.push(t); return t;
+  }
+  function typeName(t) { return t === 3 ? 'Type A' : t === 2 ? 'Type B' : 'Type C'; }
+  function rebuildBeams() {
+    texCache.forEach(function (t) { t.dispose(); }); texCache = [];
+    ['lb', 'hb'].forEach(function (fn) {
+      var L = files[fn + 'L'], R = files[fn + 'R'], gL, gR;
+      if (!L && !R) { gL = gR = fn === 'lb' ? demoLow(cfg.side) : demoHigh(); }
+      else {
+        gL = gridFromIES((L || R).ies, cfg.flip);
+        gR = (L && R) ? gridFromIES(R.ies, cfg.flip) : gL;
+      }
+      grids[fn + 'L'] = gL; grids[fn + 'R'] = gR;
+      var tL = makeTex(gL), tR = gR === gL ? tL : makeTex(gR);
+      shared['u' + fn.toUpperCase() + 'L'].value = tL; shared['u' + fn.toUpperCase() + 'R'].value = tR;
+      ['L', 'R'].forEach(function (sd) {
+        var el = $(fn + sd + '_s'), f = files[fn + sd], other = files[fn + (sd === 'L' ? 'R' : 'L')];
+        if (el.classList.contains('err')) return;
+        if (f) el.textContent = f.name + ' · ' + typeName(f.ies.type) + ' · ' + f.ies.nH + '×' + f.ies.nV + ' · peak ' + Math.round(f.ies.peak).toLocaleString() + ' cd';
+        else if (other) el.textContent = 'Using the ' + (sd === 'L' ? 'right' : 'left') + ' lamp file';
+        else el.textContent = 'Built-in demo beam';
+      });
+    });
+    updateProbe();
+  }
+
+  function updateProbe() {
+    var html = '<b>Road illuminance ahead</b>';
+    [25, 50, 75, 100].forEach(function (d) {
+      var e = roadIlluminance(d, 0, cfg, grids);
+      html += '<div><span>' + d + ' m</span><span>' + (e >= 10 ? e.toFixed(0) : e >= 1 ? e.toFixed(1) : e.toFixed(2)) + ' lx</span></div>';
+    });
+    $('probe').innerHTML = html;
+  }
+
+  function placeObjects() {
+    var carS = -car.z, near = cfg.side === 'RHT' ? 1 : -1;
+    for (var i = 0; i < objs.length; i++) {
+      var u = objs[i].userData;
+      var s = u.s + POOL * Math.ceil((carS - 40 - u.s) / POOL);
+      var sd = u.side === 0 ? near : u.side;
+      objs[i].position.set(sd * (cfg.roadW / 2 + u.off), 0, -s);
+    }
+  }
+
+  // ---------- Controls ----------
+  function num(id, lo, hi, fb) { var v = parseFloat($(id).value); if (isNaN(v)) return fb; return Math.min(hi, Math.max(lo, v)); }
+  function readInputs() {
+    cfg.roadW = num('roadW', 4, 16, 7); cfg.lampH = num('lampH', 0.3, 1.5, 0.7); cfg.spacing = num('lampS', 0.4, 2.4, 1.2);
+    cfg.eyeH = num('eyeH', 0.8, 3, 1.2); cfg.eyeB = num('eyeB', 0, 6, 2); cfg.eyeL = num('eyeL', -1, 1, -0.37);
+    cfg.aimV = num('aimV', -5, 5, 0);
+    shared.uRoadW.value = cfg.roadW; shared.uAim.value.set(0, cfg.aimV);
+    shared.uExposure.value = Math.pow(2, parseFloat($('exposure').value));
+    $('exposureVal').textContent = (parseFloat($('exposure').value) >= 0 ? '+' : '') + parseFloat($('exposure').value).toFixed(1);
+    $('speedVal').textContent = $('speed').value + ' km/h';
+    updateProbe();
+  }
+  ['roadW', 'lampH', 'lampS', 'eyeH', 'eyeB', 'eyeL', 'aimV', 'exposure', 'speed'].forEach(function (id) { $(id).addEventListener('input', readInputs); });
+  $('flipH').addEventListener('change', function () { cfg.flip = this.checked; rebuildBeams(); });
+
+  function seg(id, fn) {
+    var box = $(id);
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      setSeg(id, b.dataset.v); fn(b.dataset.v);
+    });
+  }
+  function setSeg(id, v) { Array.prototype.forEach.call($(id).children, function (c) { c.setAttribute('aria-pressed', c.dataset.v === v ? 'true' : 'false'); }); }
+  function setMode(v) { shared.uMode.value = +v; $('legend').hidden = +v !== 1; setSeg('segMode', String(v)); }
+  function setView(v) { view = v; body.visible = v === 'bird'; setSeg('segView', v); }
+  seg('segMode', setMode); seg('segView', setView);
+  seg('segSide', function (v) {
+    cfg.side = v;
+    var e = Math.abs(num('eyeL', -1, 1, 0.37)); $('eyeL').value = (v === 'RHT' ? -e : e).toFixed(2);   // driver sits on the offside
+    car.x = laneX(); car.psi = 0;
+    readInputs(); rebuildBeams();
+  });
+
+  function setBeam(which, on) {
+    cfg[which] = on; shared.uOn.value.set(cfg.lb ? 1 : 0, cfg.hb ? 1 : 0);
+    $(which === 'lb' ? 'btnLow' : 'btnHigh').setAttribute('aria-pressed', on ? 'true' : 'false'); updateProbe();
+  }
+  $('btnLow').addEventListener('click', function () { setBeam('lb', !cfg.lb); });
+  $('btnHigh').addEventListener('click', function () { setBeam('hb', !cfg.hb); });
+  function setPaused(p) { paused = p; $('btnPause').textContent = p ? 'Drive' : 'Pause'; }
+  $('btnPause').addEventListener('click', function () { setPaused(!paused); });
+  $('btnReset').addEventListener('click', function () { car.x = laneX(); car.psi = 0; });
+
+  function manual() { $('auto').checked = false; }
+  function hold(el, dir) {
+    el.addEventListener('pointerdown', function (e) { e.preventDefault(); steer = dir; manual(); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (n) { el.addEventListener(n, function () { if (steer === dir) steer = 0; }); });
+  }
+  hold($('steerL'), -1); hold($('steerR'), 1);
+
+  window.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+    var k = e.key.toLowerCase();
+    if (k === 'a' || k === 'arrowleft' || k === 'd' || k === 'arrowright') { keys[k] = true; manual(); e.preventDefault(); }
+    else if (k === 'w' || k === 'arrowup') { $('speed').value = Math.min(130, +$('speed').value + 5); readInputs(); e.preventDefault(); }
+    else if (k === 's' || k === 'arrowdown') { $('speed').value = Math.max(0, +$('speed').value - 5); readInputs(); e.preventDefault(); }
+    else if (k === 'h') setBeam('hb', !cfg.hb);
+    else if (k === 'c') setMode(shared.uMode.value > 0.5 ? 0 : 1);
+    else if (k === 'v') setView(view === 'driver' ? 'bird' : 'driver');
+    else if (k === ' ') { setPaused(!paused); e.preventDefault(); }
+  });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+
+  // IES files
+  Array.prototype.forEach.call(document.querySelectorAll('input[type=file]'), function (inp) {
+    inp.addEventListener('change', function () {
+      var f = inp.files[0], slot = inp.dataset.slot, el = $(slot + '_s'); if (!f) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        try { files[slot] = { name: f.name, ies: parseIES(String(rd.result)) }; el.classList.remove('err'); }
+        catch (err) { files[slot] = null; el.classList.add('err'); el.textContent = f.name + ' could not be read. ' + err.message; }
+        rebuildBeams();
+      };
+      rd.readAsText(f); inp.value = '';
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-clear]'), function (b) {
+    b.addEventListener('click', function () { files[b.dataset.clear] = null; $(b.dataset.clear + '_s').classList.remove('err'); rebuildBeams(); });
+  });
+
+  // ---------- Loop ----------
+  function resize() {
+    var w = stage.clientWidth, h = stage.clientHeight; if (!w || !h) return;
+    renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  if (window.ResizeObserver) new ResizeObserver(resize).observe(stage); else window.addEventListener('resize', resize);
+
+  var fwd = new THREE.Vector3(), right = new THREE.Vector3(), tmp = new THREE.Vector3(), last = performance.now(), driven = 0;
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (!paused) {
+      var target = +$('speed').value / 3.6;
+      car.v += (target - car.v) * Math.min(1, dt * 0.8);
+      var st = steer + (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
+      if ($('auto').checked) car.psi += (Math.atan((laneX() - car.x) / 20) - car.psi) * Math.min(1, dt * 2);
+      else car.psi += st * 0.35 * Math.min(1, car.v / 5) * dt;
+      car.x += Math.sin(car.psi) * car.v * dt; car.z -= Math.cos(car.psi) * car.v * dt; driven += car.v * dt;
+    }
+    fwd.set(Math.sin(car.psi), 0, -Math.cos(car.psi)); right.set(Math.cos(car.psi), 0, Math.sin(car.psi));
+    shared.uW2V.value.set(right.x, right.y, right.z, 0, 1, 0, fwd.x, fwd.y, fwd.z);
+    shared.uLampL.value.set(car.x, cfg.lampH, car.z).addScaledVector(right, -cfg.spacing / 2);
+    shared.uLampR.value.set(car.x, cfg.lampH, car.z).addScaledVector(right, cfg.spacing / 2);
+    ground.position.set(0, 0, car.z - 550);
+    placeObjects();
+    if (view === 'driver') {
+      camera.up.set(0, 1, 0);
+      camera.position.set(car.x, cfg.eyeH, car.z).addScaledVector(fwd, -cfg.eyeB).addScaledVector(right, cfg.eyeL);
+      tmp.copy(camera.position).addScaledVector(fwd, 60); tmp.y -= 3; camera.lookAt(tmp);
+    } else {
+      tmp.set(car.x, 0, car.z).addScaledVector(fwd, 45);
+      camera.up.copy(fwd); camera.position.set(tmp.x, 95, tmp.z); camera.lookAt(tmp);
+      body.position.set(car.x, 0.3, car.z).addScaledVector(fwd, -2.2); body.rotation.y = -car.psi;
+    }
+    $('hudSpeed').textContent = Math.round(car.v * 3.6);
+    $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.x - laneX() >= 0 ? '+' : '') + (car.x - laneX()).toFixed(2) + ' m from lane centre';
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+
+  car.x = laneX(); setPaused(paused); readInputs(); rebuildBeams(); resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
