@@ -109,7 +109,9 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <h2>Display</h2>
       <div class="seg" id="segMode"><button data-v="0" aria-pressed="true">Night view</button><button data-v="1" aria-pressed="false">Illuminance (lx)</button></div>
       <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
-      <div class="row"><label for="exposure">Exposure <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
+      <label class="check"><input type="checkbox" id="autoExp" checked> Auto exposure from eye adaptation</label>
+      <div class="row"><span>Adaptation luminance</span><span class="val" id="adaptVal">&ndash;</span></div>
+      <div class="row"><label for="exposure">Exposure trim <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
       <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0">
       <label class="check"><input type="checkbox" id="shadows" checked> Shadows from trees, posts and signs</label>
       <label class="check"><input type="checkbox" id="markers" checked> Distance markers</label>
@@ -292,6 +294,34 @@ function roadIlluminance(dist, lat, cfg, grids) {
     E += I / d2 * (cfg.lampH / d);
   });
   return E;
+}
+
+// ---------- Eye adaptation ----------
+// Adaptation luminance (cd/m2): log-average of the ground luminance the driver sees ahead,
+// sampled over +/-15 deg horizontally and 0.75..10 deg below the horizon. Assumes flat road straight ahead.
+function adaptationLuminance(cfg, grids, roadW, carLat) {
+  var sum = 0, n = 0, lamps = [[-cfg.spacing / 2, grids.lbL, grids.hbL], [cfg.spacing / 2, grids.lbR, grids.hbR]];
+  for (var V = -0.75; V >= -10.01; V -= 0.75) {
+    var sv = Math.sin(V * D2R), cv = Math.cos(V * D2R), t = cfg.eyeH / -sv;
+    for (var H = -15; H <= 15.01; H += 2.5) {
+      var px = cfg.eyeL + t * cv * Math.sin(H * D2R), pz = -cfg.eyeB + t * cv * Math.cos(H * D2R);
+      var road = Math.abs(px + carLat) < roadW / 2, alb = road ? 0.08 : 0.05, retro = road ? 0.015 : 0.004;
+      var L = alb * 0.004;
+      if (pz > 0.5) for (var k = 0; k < 2; k++) {
+        var x = px - lamps[k][0], d2 = x * x + cfg.lampH * cfg.lampH + pz * pz, d = Math.sqrt(d2);
+        var Hl = Math.atan2(x, pz) / D2R, Vl = Math.asin(-cfg.lampH / d) / D2R - cfg.aimV;
+        var I = (cfg.lb ? sampleGrid(lamps[k][1], Hl, Vl) : 0) + (cfg.hb ? sampleGrid(lamps[k][2], Hl, Vl) : 0);
+        L += I / d2 * (alb / Math.PI * cfg.lampH / d + retro);
+      }
+      sum += Math.log(L); n++;
+    }
+  }
+  return Math.exp(sum / n);
+}
+// Ward (1994) contrast-based scale factor: display fraction per cd/m2 such that a difference the eye can just see
+// in the real scene, adapted to Lwa, is just visible on a display peaking at Ldmax cd/m2.
+function wardScale(Lwa, Ldmax) {
+  return Math.pow((1.219 + Math.pow(Ldmax / 2, 0.4)) / (1.219 + Math.pow(Lwa, 0.4)), 2.5) / Ldmax;
 }
 
 // ---------- Track ----------
@@ -528,6 +558,29 @@ function trackAt(s) {
     var pn = new THREE.Mesh(panelGeo, mSigns[q % 3]); pn.position.set(0, 2.1, 0.05); sg.add(pn);
     addObj(sg, 80 + q * 150, 0, 1.6);      // side 0 = nearside of the traffic direction
   }
+
+  // high-mounted boards: two tall nearside direction signs and one overhead gantry per 600 m
+  function boardTexture(lines, bg) {
+    var c = document.createElement('canvas'); c.width = 512; c.height = 256; var g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, 512, 256); g.fillStyle = bg; g.fillRect(12, 12, 488, 232);
+    g.fillStyle = '#fff'; g.font = 'bold 58px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    lines.forEach(function (t, i) { g.fillText(t, 256, 128 + (i - (lines.length - 1) / 2) * 84); });
+    return new THREE.CanvasTexture(c);
+  }
+  function boardMat(lines, bg) { return mat({ albedo: [0.6, 0.6, 0.6], retro: 80, map: boardTexture(lines, bg) }); }
+  var tallPoleGeo = new THREE.CylinderGeometry(0.08, 0.08, 5.6, 8), boardGeo = new THREE.PlaneGeometry(2.6, 1.3);
+  [[170, boardMat(['Ring road', 'Test centre 3 km'], '#0b6b3a')], [470, boardMat(['Proving ground', 'Next exit'], '#1456b8')]].forEach(function (d) {
+    var tg = new THREE.Group();
+    var tp = new THREE.Mesh(tallPoleGeo, mPole); tp.position.y = 2.8; tg.add(tp);
+    var tb = new THREE.Mesh(boardGeo, d[1]); tb.position.set(0, 4.9, 0.1); tg.add(tb);     // board centre 4.9 m above the road
+    addObj(tg, d[0], 0, 2.2);
+  });
+  var gan = new THREE.Group(), ganPostGeo = new THREE.BoxGeometry(0.22, 6.6, 0.22);
+  var gp1 = new THREE.Mesh(ganPostGeo, mPole), gp2 = new THREE.Mesh(ganPostGeo, mPole); gp1.position.y = gp2.position.y = 3.3;
+  var gbeam = new THREE.Mesh(new THREE.BoxGeometry(1, 0.3, 0.3), mPole); gbeam.position.y = 6.45;
+  var gsign = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 1.6), boardMat(['\u2191 Test track', '\u2191 Skid pad'], '#1456b8')); gsign.position.set(0, 5.6, 0.2);
+  gan.add(gp1); gan.add(gp2); gan.add(gbeam); gan.add(gsign);
+  addObj(gan, 300, 0, 0); gan.userData.gantry = { p1: gp1, p2: gp2, beam: gbeam, sign: gsign };
   var body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 4.4), new THREE.MeshBasicMaterial({ color: 0x2a3140 }));
   body.visible = false; scene.add(body);
 
@@ -638,8 +691,12 @@ function trackAt(s) {
     for (var i = 0; i < objs.length; i++) {
       var u = objs[i].userData;
       var s = u.s + POOL * Math.ceil((car.s - 40 - u.s) / POOL);
-      var t = trackAt(s), lat = (u.side === 0 ? near : u.side) * (cfg.roadW / 2 + u.off);
+      var t = trackAt(s), lat = u.gantry ? 0 : (u.side === 0 ? near : u.side) * (cfg.roadW / 2 + u.off);
       objs[i].position.set(t.x + Math.cos(t.th) * lat, 0, t.z + Math.sin(t.th) * lat); objs[i].rotation.y = -t.th;
+      if (u.gantry) {          // posts straddle the road, panel hangs over the driving lane
+        var hw = cfg.roadW / 2 + 1.4;
+        u.gantry.p1.position.x = -hw; u.gantry.p2.position.x = hw; u.gantry.beam.scale.x = 2 * hw; u.gantry.sign.position.x = near * cfg.roadW / 4;
+      }
     }
   }
 
@@ -650,7 +707,7 @@ function trackAt(s) {
     cfg.eyeH = num('eyeH', 0.8, 3, 1.2); cfg.eyeB = num('eyeB', 0, 6, 2); cfg.eyeL = num('eyeL', -1, 1, -0.37);
     cfg.aimV = num('aimV', -5, 5, 0);
     shared.uRoadW.value = cfg.roadW; shared.uAim.value.set(0, cfg.aimV);
-    shared.uExposure.value = Math.pow(2, parseFloat($('exposure').value));
+    cfg.ev = parseFloat($('exposure').value);
     $('exposureVal').textContent = (parseFloat($('exposure').value) >= 0 ? '+' : '') + parseFloat($('exposure').value).toFixed(1);
     $('speedVal').textContent = $('speed').value + ' km/h';
     updateProbe();
@@ -731,7 +788,7 @@ function trackAt(s) {
   }
   if (window.ResizeObserver) new ResizeObserver(resize).observe(stage); else window.addEventListener('resize', resize);
 
-  var fwd = new THREE.Vector3(), right = new THREE.Vector3(), tmp = new THREE.Vector3(), last = performance.now(), driven = 0;
+  var fwd = new THREE.Vector3(), right = new THREE.Vector3(), tmp = new THREE.Vector3(), last = performance.now(), driven = 0, adapt = 0, tick = 0;
   function frame(now) {
     var dt = Math.min(0.05, (now - last) / 1000); last = now;
     if (!paused) {
@@ -763,6 +820,11 @@ function trackAt(s) {
     }
     $('hudSpeed').textContent = Math.round(car.v * 3.6);
     $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.lat - laneLat() >= 0 ? '+' : '') + (car.lat - laneLat()).toFixed(2) + ' m from lane centre';
+    // exposure: the eye adapts to the lit road ahead, quickly when it gets brighter and slowly when it gets darker
+    var Lw = adaptationLuminance(cfg, grids, cfg.roadW, car.lat);
+    adapt = adapt > 0 ? adapt * Math.pow(Lw / adapt, Math.min(1, dt / (Lw > adapt ? 0.4 : 1.5))) : Lw;
+    shared.uExposure.value = ($('autoExp').checked ? wardScale(adapt, 200) : 1) * Math.pow(2, cfg.ev);
+    if (tick++ % 12 === 0) $('adaptVal').textContent = (adapt >= 1 ? adapt.toFixed(1) : adapt.toFixed(2)) + ' cd/m\u00b2';
     renderShadows();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
