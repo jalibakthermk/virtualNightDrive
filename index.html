@@ -127,7 +127,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
       <div class="seg" id="segCockpit"><button data-v="off" aria-pressed="false">No cockpit</button><button data-v="car" aria-pressed="true">Car</button><button data-v="truck" aria-pressed="false">Truck</button></div>
       <label class="check"><input type="checkbox" id="autoExp" checked> Auto exposure from eye adaptation</label>
-      <div class="seg" id="segAdapt"><button data-v="frame" aria-pressed="true">Adapt to rendered view</button><button data-v="road" aria-pressed="false">Road estimate</button></div>
+      <div class="seg" id="segAdapt"><button data-v="frame" aria-pressed="true">Adapt to rendered view</button><button data-v="road" aria-pressed="false" id="adaptEst">Road estimate</button></div>
       <div class="row"><span>Adaptation luminance</span><span class="val" id="adaptVal">&ndash;</span></div>
       <div class="row"><span>Mesopic luminance</span><span class="val" id="mesoVal">&ndash;</span></div>
       <div class="row"><label for="exposure">Exposure trim <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
@@ -168,6 +168,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <h2>Road</h2>
       <div class="seg" id="segSide"><button data-v="RHT" aria-pressed="true">RHT</button><button data-v="LHT" aria-pressed="false">LHT</button></div>
       <div class="row"><label for="roadW">Road width, two lanes <small>(m)</small></label><input type="number" id="roadW" value="7.0" step="0.1" min="4" max="16"></div>
+      <label class="check"><input type="checkbox" id="flatRoad"> Flat road (no crests or dips)</label>
       <label class="check"><input type="checkbox" id="raOn" checked> Sign brightness by observation angle</label>
       <div class="seg" id="segSheet"><button data-v="RA1" aria-pressed="false">RA1</button><button data-v="RA2" aria-pressed="true">RA2</button><button data-v="RA3" aria-pressed="false">RA3</button></div>
       <div class="row"><span>Observation angle at 100 m <small>(left / right lamp)</small></span><span class="val" id="obsVal">&ndash;</span></div>
@@ -457,16 +458,35 @@ var TRACK = (function () {
       X += Math.sin(tm); Z -= Math.cos(tm); T += k; i++; x[i] = X; z[i] = Z; th[i] = T;
     }
   });
-  return { P: P, x: x, z: z, th: th };
+  // Vertical profile over the same period: grade breakpoints [s m, grade]. Grade changes linearly between breakpoints,
+  // so tangents are straight and vertical curves are parabolic. Grades +/-4 %, within the maximum grades AASHTO gives for
+  // rural roads in rolling terrain. Curve lengths from the AASHTO Green Book (2018) design K values for 80 km/h:
+  // crests K = L/A = 26 m per % (stopping sight distance), sags K = 30 m per % (headlight sight distance).
+  // Two crests (L 208 m, A 8 %) and three sags (L 120 m for 4 %, 240 m for 8 %); net elevation over one period is zero.
+  var VP = [[0, 0], [150, 0], [270, 0.04], [344, 0.04], [552, -0.04], [624, -0.04], [864, 0.04], [934, 0.04], [1142, -0.04], [1214, -0.04], [1334, 0], [1502, 0]];
+  var g = new Float64Array(P + 1), y = new Float64Array(P + 1), k = 0;
+  for (var m = 0; m <= P; m++) { while (k < VP.length - 2 && m > VP[k + 1][0]) k++; g[m] = VP[k][1] + (VP[k + 1][1] - VP[k][1]) * (m - VP[k][0]) / (VP[k + 1][0] - VP[k][0]); }
+  for (m = 1; m <= P; m++) y[m] = y[m - 1] + 0.5 * (g[m - 1] + g[m]);      // exact for a grade linear over each metre
+  return { P: P, x: x, z: z, th: th, y: y, g: g };
 })();
-// Centreline position and heading at arc length s (heading 0 = along -Z, positive = turning right).
+var PROFILE = { on: true };          // false: flat road, exactly as before the vertical profile existed
+// Centreline position, heading, elevation and grade at arc length s (heading 0 = along -Z, positive = turning right;
+// s is measured in plan).
 function trackAt(s) {
   var P = TRACK.P, n = Math.floor(s / P), r = s - n * P, i = Math.min(Math.floor(r), P - 1), f = r - i;
   return {
     x: TRACK.x[i] + (TRACK.x[i + 1] - TRACK.x[i]) * f + n * TRACK.x[P],
     z: TRACK.z[i] + (TRACK.z[i + 1] - TRACK.z[i]) * f + n * TRACK.z[P],
-    th: TRACK.th[i] + (TRACK.th[i + 1] - TRACK.th[i]) * f
+    th: TRACK.th[i] + (TRACK.th[i + 1] - TRACK.th[i]) * f,
+    y: PROFILE.on ? TRACK.y[i] + (TRACK.y[i + 1] - TRACK.y[i]) * f : 0,
+    g: PROFILE.on ? TRACK.g[i] + (TRACK.g[i + 1] - TRACK.g[i]) * f : 0
   };
+}
+// Vehicle axes for heading psi on grade g: forward F pitched with the grade, right R level, up U = R x F.
+// Rows R, U, F make the world-to-vehicle rotation used to look up the beam.
+function vehicleFrame(psi, g) {
+  var c = 1 / Math.sqrt(1 + g * g), F = [Math.sin(psi) * c, g * c, -Math.cos(psi) * c], Rt = [Math.cos(psi), 0, Math.sin(psi)];
+  return { F: F, R: Rt, U: [Rt[1] * F[2] - Rt[2] * F[1], Rt[2] * F[0] - Rt[0] * F[2], Rt[0] * F[1] - Rt[1] * F[0]] };
 }
 // ---------- Light source colour and eye response ----------
 // Spectra on a 5 nm grid 380..780 nm. CIE 1931 2deg colour matching functions from the Wyman, Sloan & Shirley (2013)
@@ -731,25 +751,27 @@ function lightRGB(src, D) {
   var farG = new THREE.Mesh(farGeo, farMat); farG.frustumCulled = false; scene.add(farG);   // distant grass under everything
 
   // road ribbon: a strip 60 m wide that follows the track centreline; aTrack carries (metres across, metres along)
-  var RN = 400, RSTEP = 2, RHALF = 30, ribBase = null;
+  var RN = 400, RSTEP = 2, RHALF = 60, ribBase = null;      // RHALF stays below the 150 m minimum curve radius
   var ribPos = new Float32Array((RN + 1) * 6), ribNor = new Float32Array((RN + 1) * 6), ribTrk = new Float32Array((RN + 1) * 4), ribIdx = [];
   for (var ri = 0; ri <= RN; ri++) {
     ribNor[ri * 6 + 1] = 1; ribNor[ri * 6 + 4] = 1;
     if (ri < RN) { var ra = ri * 2; ribIdx.push(ra, ra + 1, ra + 3, ra, ra + 3, ra + 2); }
   }
   var ribGeo = new THREE.BufferGeometry();
-  var ribPosA = new THREE.BufferAttribute(ribPos, 3), ribTrkA = new THREE.BufferAttribute(ribTrk, 2);
-  ribGeo.setAttribute('position', ribPosA); ribGeo.setAttribute('normal', new THREE.BufferAttribute(ribNor, 3));
+  var ribPosA = new THREE.BufferAttribute(ribPos, 3), ribTrkA = new THREE.BufferAttribute(ribTrk, 2), ribNorA = new THREE.BufferAttribute(ribNor, 3);
+  ribGeo.setAttribute('position', ribPosA); ribGeo.setAttribute('normal', ribNorA);
   ribGeo.setAttribute('aTrack', ribTrkA); ribGeo.setIndex(ribIdx);
   var ribbon = new THREE.Mesh(ribGeo, mat({ kind: 0, albedo: [0.08, 0.08, 0.08] })); ribbon.frustumCulled = false; scene.add(ribbon);
   function updateRibbon() {
     var base = Math.floor((car.s - 60) / 20) * 20; if (base === ribBase) return; ribBase = base;
     for (var i = 0; i <= RN; i++) {
       var s = base + i * RSTEP, t = trackAt(s), rx = Math.cos(t.th) * RHALF, rz = Math.sin(t.th) * RHALF, a = i * 6, b = i * 4;
-      ribPos[a] = t.x - rx; ribPos[a + 1] = 0; ribPos[a + 2] = t.z - rz; ribPos[a + 3] = t.x + rx; ribPos[a + 4] = 0; ribPos[a + 5] = t.z + rz;
+      ribPos[a] = t.x - rx; ribPos[a + 1] = t.y; ribPos[a + 2] = t.z - rz; ribPos[a + 3] = t.x + rx; ribPos[a + 4] = t.y; ribPos[a + 5] = t.z + rz;
       ribTrk[b] = -RHALF; ribTrk[b + 1] = s; ribTrk[b + 2] = RHALF; ribTrk[b + 3] = s;
+      var nl = 1 / Math.sqrt(1 + t.g * t.g);     // ground normal: perpendicular to the road tangent (sin th, g, -cos th), level across
+      ribNor[a] = ribNor[a + 3] = -t.g * Math.sin(t.th) * nl; ribNor[a + 1] = ribNor[a + 4] = nl; ribNor[a + 2] = ribNor[a + 5] = t.g * Math.cos(t.th) * nl;
     }
-    ribPosA.needsUpdate = true; ribTrkA.needsUpdate = true;
+    ribPosA.needsUpdate = true; ribTrkA.needsUpdate = true; ribNorA.needsUpdate = true;
   }
 
   // roadside objects recycle along the road every POOL metres
@@ -854,7 +876,7 @@ function lightRGB(src, D) {
     var near = cfg.side === 'RHT' ? 1 : -1;
     markerList.forEach(function (grp) {
       var u = grp.userData, t = trackAt(car.s + u.d), k = Math.max(1, u.d / 40);
-      grp.position.set(t.x, 0, t.z); grp.rotation.y = -t.th;
+      grp.position.set(t.x, t.y, t.z); grp.rotation.y = -t.th;
       u.line.scale.x = cfg.roadW; u.lab.scale.set(k, k, 1); u.lab.position.set(near * (cfg.roadW / 2 + 0.6 + 0.8 * k), 0.5 * k, 0);
     });
   }
@@ -871,7 +893,7 @@ function lightRGB(src, D) {
   } catch (e) { shadowRT = null; }
   function renderShadows() {
     var on = !!shadowRT && $('shadows').checked; shared.uShadowOn.value = on ? 1 : 0; if (!on) return;
-    shadowCam.position.set(car.x, cfg.lampH, car.z); tmp.copy(shadowCam.position).add(fwd); shadowCam.lookAt(tmp);
+    shadowCam.position.set(car.x, car.y, car.z).addScaledVector(upv, cfg.lampH); tmp.copy(shadowCam.position).add(fwd); shadowCam.lookAt(tmp);
     shadowCam.updateMatrixWorld(); shadowCam.matrixWorldInverse.copy(shadowCam.matrixWorld).invert();
     shared.uShadowMat.value.multiplyMatrices(shadowCam.projectionMatrix, shadowCam.matrixWorldInverse);
     var bv = body.visible, mv = markers.visible;
@@ -906,7 +928,7 @@ function lightRGB(src, D) {
 
   // ---------- State ----------
   var cfg = { side: 'RHT', roadW: 7, lampH: 0.7, spacing: 1.2, eyeH: 1.2, eyeB: 2, eyeL: -0.37, aimV: 0, lb: true, hb: false, flip: false };
-  var car = { x: 1.75, z: 0, psi: 0, v: 0, s: 0, lat: 1.75 };   // s, lat = position along and across the track
+  var car = { x: 1.75, y: 0, z: 0, g: 0, psi: 0, v: 0, s: 0, lat: 1.75 };   // s, lat = position along and across the track
   var view = 'driver', paused = window.matchMedia('(prefers-reduced-motion: reduce)').matches, steer = 0, keys = {};
   var files = { lbL: null, lbR: null, hbL: null, hbR: null };   // parsed IES + name
   var grids = {}, texCache = [];
@@ -953,7 +975,7 @@ function lightRGB(src, D) {
 
   function updateProbe() {
     if (!grids.lbL) return;
-    var html = '<b>Road illuminance ahead</b>';
+    var html = '<b>Road illuminance ahead' + (PROFILE.on ? ' (flat road)' : '') + '</b>';
     [25, 50, 75, 100].forEach(function (d) {
       var e = roadIlluminance(d, 0, cfg, grids);
       html += '<div><span>' + d + ' m</span><span>' + (e >= 10 ? e.toFixed(0) : e >= 1 ? e.toFixed(1) : e.toFixed(2)) + ' lx</span></div>';
@@ -967,7 +989,7 @@ function lightRGB(src, D) {
       var u = objs[i].userData;
       var s = u.s + POOL * Math.ceil((car.s - 40 - u.s) / POOL);
       var t = trackAt(s), lat = u.gantry ? 0 : (u.side === 0 ? near : u.side) * (cfg.roadW / 2 + u.off);
-      objs[i].position.set(t.x + Math.cos(t.th) * lat, 0, t.z + Math.sin(t.th) * lat); objs[i].rotation.y = -t.th;
+      objs[i].position.set(t.x + Math.cos(t.th) * lat, t.y, t.z + Math.sin(t.th) * lat); objs[i].rotation.y = -t.th;
       if (u.gantry) {          // posts straddle the road, panel hangs over the driving lane
         var hw = cfg.roadW / 2 + 1.4;
         u.gantry.p1.position.x = -hw; u.gantry.p2.position.x = hw; u.gantry.beam.scale.x = 2 * hw; u.gantry.sign.position.x = near * cfg.roadW / 4;
@@ -1061,6 +1083,14 @@ function lightRGB(src, D) {
   }
   seg('segSheet', function (v) { sheet = v; applySheet(); });
   var adaptFrom = 'frame', frameLw = 0;
+  function applyProfile() {
+    PROFILE.on = !$('flatRoad').checked; ribBase = null;
+    var lo = Infinity; for (var i = 0; i <= TRACK.P; i++) lo = Math.min(lo, TRACK.y[i]);
+    farG.position.y = PROFILE.on ? lo - 1 : -0.05;       // distant ground below the lowest point of the road
+    $('adaptEst').textContent = PROFILE.on ? 'Flat-road estimate' : 'Road estimate';
+    updateProbe();
+  }
+  $('flatRoad').addEventListener('change', applyProfile);
   seg('segAdapt', function (v) { adaptFrom = v; });
   $('raOn').addEventListener('change', applySheet);
   seg('segMode', setMode); seg('segView', setView);
@@ -1091,7 +1121,7 @@ function lightRGB(src, D) {
     var beams = ([cfg.lb ? 'Low beam' : null, cfg.hb ? 'High beam' : null].filter(Boolean).join(' + ') || 'Lamps off') + ' \u00b7 ' + SOURCES[src.key].label + ' ' + Math.round(src.data.cct) + ' K';
     var lines = [
       'Virtual Driver \u00b7 ' + beams + ' \u00b7 ' + cfg.side + ' \u00b7 road ' + cfg.roadW.toFixed(1) + ' m \u00b7 lamps ' + cfg.lampH.toFixed(2) + ' m high, ' + cfg.spacing.toFixed(2) + ' m apart \u00b7 eye ' + cfg.eyeH.toFixed(2) + ' m',
-      'Road illuminance ahead: ' + [25, 50, 75, 100].map(function (d) { return d + ' m ' + fmtLx(roadIlluminance(d, 0, cfg, grids)); }).join(', ') +
+      'Road illuminance ahead' + (PROFILE.on ? ' (flat road)' : '') + ': ' + [25, 50, 75, 100].map(function (d) { return d + ' m ' + fmtLx(roadIlluminance(d, 0, cfg, grids)); }).join(', ') +
         (shared.uIsoN.value > 0 ? ' \u00b7 isolux ' + shared.uIso.value.slice(0, shared.uIsoN.value).join(', ') + ' lx' : '') +
         ' \u00b7 adaptation ' + adapt.toFixed(2) + ' cd/m\u00b2 \u00b7 S/P ' + src.data.SP.toFixed(2)
     ];
@@ -1192,21 +1222,23 @@ function lightRGB(src, D) {
       car.x += Math.sin(car.psi) * car.v * dt; car.z -= Math.cos(car.psi) * car.v * dt; driven += car.v * dt;
     }
     projectCar();
-    fwd.set(Math.sin(car.psi), 0, -Math.cos(car.psi)); right.set(Math.cos(car.psi), 0, Math.sin(car.psi));
-    shared.uW2V.value.set(right.x, right.y, right.z, 0, 1, 0, fwd.x, fwd.y, fwd.z);
-    shared.uLampL.value.set(car.x, cfg.lampH, car.z).addScaledVector(right, -cfg.spacing / 2);
-    shared.uLampR.value.set(car.x, cfg.lampH, car.z).addScaledVector(right, cfg.spacing / 2);
-    farG.position.set(car.x, -0.05, car.z); updateRibbon(); placeMarkers();
+    var tc = trackAt(car.s); car.y = tc.y; car.g = tc.g;           // the car sits on the road and pitches with its grade
+    var vf = vehicleFrame(car.psi, car.g);
+    fwd.fromArray(vf.F); right.fromArray(vf.R); upv.fromArray(vf.U);
+    shared.uW2V.value.set(right.x, right.y, right.z, upv.x, upv.y, upv.z, fwd.x, fwd.y, fwd.z);
+    shared.uLampL.value.set(car.x, car.y, car.z).addScaledVector(upv, cfg.lampH).addScaledVector(right, -cfg.spacing / 2);
+    shared.uLampR.value.set(car.x, car.y, car.z).addScaledVector(upv, cfg.lampH).addScaledVector(right, cfg.spacing / 2);
+    farG.position.x = car.x; farG.position.z = car.z; updateRibbon(); placeMarkers();
     placeObjects();
-    shared.uEye.value.set(car.x, cfg.eyeH, car.z).addScaledVector(fwd, -cfg.eyeB).addScaledVector(right, cfg.eyeL);   // the driver's eye, in every view
+    shared.uEye.value.set(car.x, car.y, car.z).addScaledVector(upv, cfg.eyeH).addScaledVector(fwd, -cfg.eyeB).addScaledVector(right, cfg.eyeL);   // the driver's eye, in every view
     if (view === 'driver') {
-      camera.up.set(0, 1, 0);
+      camera.up.copy(upv);
       camera.position.copy(shared.uEye.value);
-      tmp.copy(camera.position).addScaledVector(fwd, 60); tmp.y -= 3; camera.lookAt(tmp);
+      tmp.copy(camera.position).addScaledVector(fwd, 60).addScaledVector(upv, -3); camera.lookAt(tmp);
     } else {
-      tmp.set(car.x, 0, car.z).addScaledVector(fwd, 45);
-      camera.up.copy(fwd); camera.position.set(tmp.x, 95, tmp.z); camera.lookAt(tmp);
-      body.position.set(car.x, 0.3, car.z).addScaledVector(fwd, -2.2); body.rotation.y = -car.psi;
+      tmp.set(car.x + Math.sin(car.psi) * 45, car.y, car.z - Math.cos(car.psi) * 45);
+      camera.up.set(Math.sin(car.psi), 0, -Math.cos(car.psi)); camera.position.set(tmp.x, tmp.y + 95, tmp.z); camera.lookAt(tmp);
+      body.position.set(car.x, car.y + 0.3, car.z).addScaledVector(fwd, -2.2); body.rotation.set(0, -car.psi, 0);
     }
     $('hudSpeed').textContent = Math.round(car.v * 3.6);
     $('cockpit').hidden = cockpit === 'off' || view !== 'driver';
@@ -1234,7 +1266,7 @@ function lightRGB(src, D) {
     requestAnimationFrame(frame);
   }
 
-  applySource(); applySheet(); applyMarkers(); applyIso(); buildCockpit(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
+  applyProfile(); applySource(); applySheet(); applyMarkers(); applyIso(); buildCockpit(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
   requestAnimationFrame(frame);
 })();
 </script>
