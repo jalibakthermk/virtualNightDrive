@@ -167,7 +167,10 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <h2>Road</h2>
       <div class="seg" id="segSide"><button data-v="RHT" aria-pressed="true">RHT</button><button data-v="LHT" aria-pressed="false">LHT</button></div>
       <div class="row"><label for="roadW">Road width, two lanes <small>(m)</small></label><input type="number" id="roadW" value="7.0" step="0.1" min="4" max="16"></div>
-    </section>
+      <label class="check"><input type="checkbox" id="raOn" checked> Sign brightness by observation angle</label>
+      <div class="seg" id="segSheet"><button data-v="RA1" aria-pressed="false">RA1</button><button data-v="RA2" aria-pressed="true">RA2</button><button data-v="RA3" aria-pressed="false">RA3</button></div>
+      <div class="row"><span>Observation angle at 100 m <small>(left / right lamp)</small></span><span class="val" id="obsVal">&ndash;</span></div>
+      <p class="note" id="sheetNote"></p>
 
     <section>
       <h2>Driving</h2>
@@ -320,6 +323,43 @@ function roadIlluminance(dist, lat, cfg, grids) {
     E += I / d2 * (cfg.lampH / d);
   });
   return E;
+}
+
+// ---------- Retroreflective sheeting ----------
+// Coefficient of retroreflection R_A (cd per lx per m2) of white sheeting, indexed [observation angle][entrance angle].
+// Observation angles alpha: 12' (0.2 deg), 20' (0.333 deg), 2 deg. Entrance angles beta1: 5, 30, 40 deg (beta2 = 0).
+// RA1 and RA2: minimum values from EN 12899-1:2007, Table 3 (class RA1) and Table 4 (class RA2).
+// RA3: PLACEHOLDER, not standard data. EN 12899-1:2007 leaves RA3 (microprismatic) values to national rules; these numbers
+// only mimic the shape of such sheeting (higher than RA2 at every angle). Replace them with the data for your material.
+var RA_ALPHA = [0.2, 1 / 3, 2], RA_BETA = [5, 30, 40];
+var RA_TABLES = {
+  RA1: { v: [70, 30, 10, 50, 24, 9, 5, 2.5, 1.5], src: 'EN 12899-1:2007 Table 3' },
+  RA2: { v: [250, 150, 110, 180, 100, 95, 5, 2.5, 1.5], src: 'EN 12899-1:2007 Table 4' },
+  RA3: { v: [600, 350, 200, 450, 270, 160, 20, 12, 8], src: 'placeholder, not from a standard', placeholder: true }
+};
+// R_A at observation angle a and entrance angle b (degrees). Interpolation is linear in log R_A against log(alpha) and
+// against beta. Below 0.2 deg alpha and below 5 deg beta the edge value is held. Beyond 2 deg alpha the last log-log slope
+// continues. Beyond 40 deg beta the 40 deg value falls with cos(beta)/cos(40 deg) to zero at 90 deg (an assumption,
+// the standard gives no values there). The shader function raLookup() is the same calculation.
+function raLookup(v, a, b) {
+  var la = Math.log(Math.max(a, RA_ALPHA[0])), l0 = Math.log(RA_ALPHA[0]), l1 = Math.log(RA_ALPHA[1]), l2 = Math.log(RA_ALPHA[2]);
+  var bb = Math.min(Math.max(b, 5), 40), lo = bb < 30, tb = lo ? (bb - 5) / 25 : (bb - 30) / 10;
+  var row = function (r) { var p = Math.log(v[r * 3 + (lo ? 0 : 1)]), q = Math.log(v[r * 3 + (lo ? 1 : 2)]); return p + (q - p) * tb; };
+  var r0 = row(0), r1 = row(1), r2 = row(2);
+  var lr = la < l1 ? r0 + (r1 - r0) * (la - l0) / (l1 - l0) : r1 + (r2 - r1) * (la - l1) / (l2 - l1);
+  var r = Math.exp(lr);
+  if (b > 40) r *= Math.max(Math.cos(b * D2R), 0) / Math.cos(40 * D2R);
+  return r;
+}
+// Observation angle (deg) of each lamp [left, right] at a point `dist` m ahead of the lamps, `lat` m right of the
+// vehicle centreline and `h` m above the road: the angle at that point between the directions to the lamp and to the eye.
+function observationAngles(cfg, dist, lat, h) {
+  var e = [cfg.eyeL - lat, cfg.eyeH - h, -cfg.eyeB - dist];
+  return [-cfg.spacing / 2, cfg.spacing / 2].map(function (x) {
+    var a = [x - lat, cfg.lampH - h, -dist];
+    var c = [a[1] * e[2] - a[2] * e[1], a[2] * e[0] - a[0] * e[2], a[0] * e[1] - a[1] * e[0]];
+    return Math.atan2(Math.hypot(c[0], c[1], c[2]), a[0] * e[0] + a[1] * e[1] + a[2] * e[2]) / D2R;
+  });
 }
 
 // ---------- Cockpit overlay ----------
@@ -519,6 +559,7 @@ function lightRGB(src, D) {
     'uniform vec3 uLampL; uniform vec3 uLampR; uniform mat3 uW2V; uniform vec2 uAim; uniform vec2 uOn; uniform vec2 uGrid;',
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
     'uniform vec3 uAlbedo; uniform vec3 uLight; uniform float uMeso;',
+    'uniform vec3 uEye; uniform float uRAOn; uniform float uRA[9];',
     'uniform float uIso[8]; uniform float uIsoN;',
     'uniform sampler2D uShadowMap; uniform mat4 uShadowMat; uniform float uShadowOn; uniform vec2 uShadowNF; uniform vec2 uShadowPx;',
     'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv; varying vec2 vTrack;',
@@ -534,12 +575,32 @@ function lightRGB(src, D) {
     '  float a = fx-i0; float b = fy-j0;',
     '  return mix(mix(tx(t,i0,j0),tx(t,i0+1.0,j0),a), mix(tx(t,i0,j0+1.0),tx(t,i0+1.0,j0+1.0),a), b);',
     '}',
-    'void lamp(vec3 pos, sampler2D lb, sampler2D hb, vec3 N, inout float ePerp, inout float eSurf){',
+    // R_A of the selected sheeting class: same calculation as raLookup() in the page core
+    'float raLookup(float a, float b){',
+    '  float la = log(max(a, 0.2)); float l0 = log(0.2); float l1 = log(1.0/3.0); float l2 = log(2.0);',
+    '  float bb = clamp(b, 5.0, 40.0); bool lo = bb < 30.0; float tb = lo ? (bb-5.0)/25.0 : (bb-30.0)/10.0;',
+    '  float r0 = lo ? mix(log(uRA[0]), log(uRA[1]), tb) : mix(log(uRA[1]), log(uRA[2]), tb);',
+    '  float r1 = lo ? mix(log(uRA[3]), log(uRA[4]), tb) : mix(log(uRA[4]), log(uRA[5]), tb);',
+    '  float r2 = lo ? mix(log(uRA[6]), log(uRA[7]), tb) : mix(log(uRA[7]), log(uRA[8]), tb);',
+    '  float r = exp(la < l1 ? r0 + (r1-r0)*(la-l0)/(l1-l0) : r1 + (r2-r1)*(la-l1)/(l2-l1));',
+    '  if (b > 40.0) r *= max(cos(radians(b)), 0.0) / cos(radians(40.0));',
+    '  return r;',
+    '}',
+    // Per lamp: ePerp = illuminance on a plane facing the lamp (E_perp = I/d^2), eSurf = on the surface (E_perp cos(beta)),
+    // eRA = sum of R_A(alpha, beta) E_perp, where alpha is the observation angle (lamp and eye seen from the point) and
+    // beta the entrance angle (surface normal to lamp). Angles use atan(|a x b|, a.b), which stays exact at 0.2 deg.
+    'void lamp(vec3 pos, sampler2D lb, sampler2D hb, vec3 N, bool doRA, inout float ePerp, inout float eSurf, inout float eRA){',
     '  vec3 L = vWP - pos; float d2 = max(dot(L,L), 0.25); vec3 dir = L / sqrt(d2);',
     '  float cosi = dot(N, -dir); if (cosi <= 0.0) return;',
     '  vec3 dv = uW2V * dir;',
     '  float I = uOn.x * lampI(lb, dv) + uOn.y * lampI(hb, dv);',
     '  float e = I / d2; ePerp += e; eSurf += e * cosi;',
+    '  if (doRA) {',
+    '    vec3 toL = -L; vec3 toE = uEye - vWP;',
+    '    float a = degrees(atan(length(cross(toL, toE)), dot(toL, toE)));',
+    '    float b = degrees(atan(length(cross(N, -dir)), cosi));',
+    '    eRA += e * raLookup(a, b);',
+    '  }',
     '}',
     'float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }',
     'vec3 ramp(float t){',
@@ -561,10 +622,11 @@ function lightRGB(src, D) {
     'void main(){',
     '  bool isGround = uKind < 0.5 || uKind > 1.5;',
     '  vec3 N = normalize(vWN); if (!isGround && !gl_FrontFacing) N = -N;',
-    '  float ep = 0.0; float es = 0.0;',
-    '  lamp(uLampL, uLBL, uHBL, N, ep, es); lamp(uLampR, uLBR, uHBR, N, ep, es);',
+    '  bool sheet = !isGround && uRetro > 0.0 && uRAOn > 0.5;',   // retroreflective sheeting: signs and delineator patches
+    '  float ep = 0.0; float es = 0.0; float era = 0.0;',
+    '  lamp(uLampL, uLBL, uHBL, N, sheet, ep, es, era); lamp(uLampR, uLBR, uHBR, N, sheet, ep, es, era);',
     '  float esRaw = es;',                               // illuminance before shadows, for the isolux lines
-    '  float sh = shade(); ep *= sh; es *= sh;',
+    '  float sh = shade(); ep *= sh; es *= sh; era *= sh;',
     '  vec3 alb = uAlbedo; float retro = uRetro; vec3 rc = vec3(1.0); float mark = 0.0;',
     '  if (isGround) {',
     '    float x = vTrack.x; float s = vTrack.y; float ax = abs(x); float hw = uRoadW*0.5;',   // metres across and along the road
@@ -591,7 +653,12 @@ function lightRGB(src, D) {
     '    col = ramp(clamp(t,0.0,1.0)) * smoothstep(-0.25, 0.0, t) * (0.7 + 0.3*clamp(max(alb.r,max(alb.g,alb.b))*2.0,0.0,1.0));',
     '    col = max(col, alb*0.25);',
     '  } else {',
-    '    vec3 lum = (alb*(es/PI) + rc*retro*ep) * uLight + alb*0.004;',
+    // Retroreflected luminance of sheeting: L = sum_k R_A(alpha_k, beta_k) E_perp,k / cos(v), with v the viewing angle
+    // (normal to eye). R_A is defined per unit sign area and the eye sees that area foreshortened by cos(v); v is held
+    // to at most 84 deg. Sheeting colour scales R_A by the texture colour's relative luminance (about 0.1 for blue and
+    // 0.15 for red, near the EN 12899-1 colour ratios for RA2). With the effect off the old constant is used: retro * E_perp.
+    '    vec3 retroL = sheet ? rc * era / max(dot(N, normalize(uEye - vWP)), 0.1) : rc * retro * ep;',
+    '    vec3 lum = (alb*(es/PI) + retroL) * uLight + alb*0.004;',
     '    if (uMeso > 0.5) {',              // colour fades towards grey as each patch falls into mesopic and scotopic vision (CIE 191 m)
     '      float Y = dot(lum, vec3(0.2126,0.7152,0.0722));',
     '      lum = mix(vec3(Y), lum, clamp(0.767 + 0.3334*log(max(Y,1e-9))/log(10.0), 0.0, 1.0));',
@@ -619,6 +686,7 @@ function lightRGB(src, D) {
     uExposure: { value: 1 }, uMode: { value: 0 }, uRoadW: { value: 7 },
     uIso: { value: [1, 1, 1, 1, 1, 1, 1, 1] }, uIsoN: { value: 0 },
     uLight: { value: new THREE.Vector3(1, 1, 1) }, uMeso: { value: 1 },
+    uEye: { value: new THREE.Vector3() }, uRAOn: { value: 1 }, uRA: { value: RA_TABLES.RA2.v.slice() },
     uShadowMap: { value: null }, uShadowMat: { value: new THREE.Matrix4() }, uShadowOn: { value: 0 },
     uShadowNF: { value: new THREE.Vector2(0.8, 500) }, uShadowPx: { value: new THREE.Vector2(1 / 2048, 1 / 1024) }
   };
@@ -869,6 +937,8 @@ function lightRGB(src, D) {
     cfg.ev = parseFloat($('exposure').value);
     $('exposureVal').textContent = (parseFloat($('exposure').value) >= 0 ? '+' : '') + parseFloat($('exposure').value).toFixed(1);
     $('speedVal').textContent = $('speed').value + ' km/h';
+    var oa = observationAngles(cfg, 100, 0, 2.1);       // target on the centreline at the height of the low sign panels
+    $('obsVal').textContent = oa[0].toFixed(2) + '\u00b0 / ' + oa[1].toFixed(2) + '\u00b0';
     updateProbe();
   }
   ['roadW', 'lampH', 'lampS', 'eyeH', 'eyeB', 'eyeL', 'aimV', 'exposure', 'speed'].forEach(function (id) { $(id).addEventListener('input', readInputs); });
@@ -935,6 +1005,14 @@ function lightRGB(src, D) {
   }
   seg('segSrc', function (v) { src.key = v; $('cct').value = SOURCES[v].cct; applySource(); });
   $('cct').addEventListener('change', applySource);
+  // retroreflective sheeting class for signs and delineator patches
+  var sheet = 'RA2';
+  function applySheet() {
+    var t = RA_TABLES[sheet]; shared.uRA.value = t.v.slice(); shared.uRAOn.value = $('raOn').checked ? 1 : 0;
+    $('sheetNote').textContent = $('raOn').checked ? sheet + ': ' + t.src + (t.placeholder ? '. Replace with your sheeting data.' : '.') : 'Off: signs use one fixed coefficient, as before.';
+  }
+  seg('segSheet', function (v) { sheet = v; applySheet(); });
+  $('raOn').addEventListener('change', applySheet);
   seg('segMode', setMode); seg('segView', setView);
   seg('segCockpit', function (v) { cockpit = v; buildCockpit(); });
   seg('segSide', function (v) {
@@ -1070,9 +1148,10 @@ function lightRGB(src, D) {
     shared.uLampR.value.set(car.x, cfg.lampH, car.z).addScaledVector(right, cfg.spacing / 2);
     farG.position.set(car.x, -0.05, car.z); updateRibbon(); placeMarkers();
     placeObjects();
+    shared.uEye.value.set(car.x, cfg.eyeH, car.z).addScaledVector(fwd, -cfg.eyeB).addScaledVector(right, cfg.eyeL);   // the driver's eye, in every view
     if (view === 'driver') {
       camera.up.set(0, 1, 0);
-      camera.position.set(car.x, cfg.eyeH, car.z).addScaledVector(fwd, -cfg.eyeB).addScaledVector(right, cfg.eyeL);
+      camera.position.copy(shared.uEye.value);
       tmp.copy(camera.position).addScaledVector(fwd, 60); tmp.y -= 3; camera.lookAt(tmp);
     } else {
       tmp.set(car.x, 0, car.z).addScaledVector(fwd, 45);
@@ -1102,7 +1181,7 @@ function lightRGB(src, D) {
     requestAnimationFrame(frame);
   }
 
-  applySource(); applyMarkers(); applyIso(); buildCockpit(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
+  applySource(); applySheet(); applyMarkers(); applyIso(); buildCockpit(); resetCar(); setPaused(paused); readInputs(); rebuildBeams(); resize();
   requestAnimationFrame(frame);
 })();
 </script>
