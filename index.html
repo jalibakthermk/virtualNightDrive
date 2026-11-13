@@ -127,6 +127,7 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
       <div class="seg" id="segCockpit"><button data-v="off" aria-pressed="false">No cockpit</button><button data-v="car" aria-pressed="true">Car</button><button data-v="truck" aria-pressed="false">Truck</button></div>
       <label class="check"><input type="checkbox" id="autoExp" checked> Auto exposure from eye adaptation</label>
+      <div class="seg" id="segAdapt"><button data-v="frame" aria-pressed="true">Adapt to rendered view</button><button data-v="road" aria-pressed="false">Road estimate</button></div>
       <div class="row"><span>Adaptation luminance</span><span class="val" id="adaptVal">&ndash;</span></div>
       <div class="row"><span>Mesopic luminance</span><span class="val" id="mesoVal">&ndash;</span></div>
       <div class="row"><label for="exposure">Exposure trim <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
@@ -415,6 +416,25 @@ function adaptationLuminance(cfg, grids, roadW, carLat) {
   }
   return Math.exp(sum / n);
 }
+// Adaptation measured from the rendered view. A small luminance image (LUM.w x LUM.h) is rendered from the driver's eye,
+// looking along the vehicle axis LUM.pitch deg below the horizon with a LUM.vfov deg vertical field (about 46 x 24 deg).
+// The adaptation luminance is its log-average with Gaussian centre weighting (sigma LUM.sh deg across, LUM.sv deg up and
+// down). Pixels with no geometry (the sky) are left out, as in the road estimate above. Pixels arrive either as float RGB
+// luminance (cd/m2) or, where float render targets are missing, log2-encoded into 16 bits of R and G (2^-20..2^14 cd/m2).
+var LUM = { w: 64, h: 32, vfov: 24, aspect: 2, pitch: -2, sh: 10, sv: 4 };
+function frameAdaptation(px, w, h, enc) {
+  var tv = Math.tan(LUM.vfov / 2 * D2R), th = tv * LUM.aspect, sum = 0, ws = 0;
+  for (var j = 0; j < h; j++) for (var i = 0; i < w; i++) {
+    var k = (j * w + i) * 4, Y;
+    if (enc) { if (px[k + 3] < 128) continue; Y = Math.pow(2, (px[k] * 256 + px[k + 1]) / 65535 * 34 - 20); }
+    else { if (px[k + 3] < 0.5) continue; Y = 0.2126 * px[k] + 0.7152 * px[k + 1] + 0.0722 * px[k + 2]; }
+    var x = ((i + 0.5) / w * 2 - 1) * th, y = ((j + 0.5) / h * 2 - 1) * tv;
+    var ah = Math.atan(x) / D2R, av = Math.atan(y / Math.sqrt(1 + x * x)) / D2R;      // angles from the view centre
+    var wt = Math.exp(-0.5 * (ah * ah / (LUM.sh * LUM.sh) + av * av / (LUM.sv * LUM.sv)));
+    sum += wt * Math.log(Math.max(Y, 1e-6)); ws += wt;
+  }
+  return ws > 0 ? Math.exp(sum / ws) : 0;
+}
 // Ward (1994) contrast-based scale factor: display fraction per cd/m2 such that a difference the eye can just see
 // in the real scene, adapted to Lwa, is just visible on a display peaking at Ldmax cd/m2.
 function wardScale(Lwa, Ldmax) {
@@ -559,7 +579,7 @@ function lightRGB(src, D) {
     'uniform vec3 uLampL; uniform vec3 uLampR; uniform mat3 uW2V; uniform vec2 uAim; uniform vec2 uOn; uniform vec2 uGrid;',
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
     'uniform vec3 uAlbedo; uniform vec3 uLight; uniform float uMeso;',
-    'uniform vec3 uEye; uniform float uRAOn; uniform float uRA[9];',
+    'uniform vec3 uEye; uniform float uRAOn; uniform float uRA[9]; uniform float uLumOut;',
     'uniform float uIso[8]; uniform float uIsoN;',
     'uniform sampler2D uShadowMap; uniform mat4 uShadowMat; uniform float uShadowOn; uniform vec2 uShadowNF; uniform vec2 uShadowPx;',
     'varying vec3 vWP; varying vec3 vWN; varying vec2 vUv; varying vec2 vTrack;',
@@ -647,22 +667,27 @@ function lightRGB(src, D) {
     '    vec4 m = texture2D(uMap, vUv); if (m.a < 0.5) discard;',
     '    vec3 c = pow(m.rgb, vec3(2.2)); alb = c*0.6; rc = c;',
     '  }',
+    // Retroreflected luminance of sheeting: L = sum_k R_A(alpha_k, beta_k) E_perp,k / cos(v), with v the viewing angle
+    // (normal to eye). R_A is defined per unit sign area and the eye sees that area foreshortened by cos(v); v is held
+    // to at most 84 deg. Sheeting colour scales R_A by the texture colour's relative luminance (about 0.1 for blue and
+    // 0.15 for red, near the EN 12899-1 colour ratios for RA2). With the effect off the old constant is used: retro * E_perp.
+    '  vec3 retroL = sheet ? rc * era / max(dot(N, normalize(uEye - vWP)), 0.1) : rc * retro * ep;',
+    '  vec3 lum = (alb*(es/PI) + retroL) * uLight + alb*0.004;',   // cd/m2; last term is faint night-sky ambient
+    '  if (uMeso > 0.5) {',              // colour fades towards grey as each patch falls into mesopic and scotopic vision (CIE 191 m)
+    '    float Y = dot(lum, vec3(0.2126,0.7152,0.0722));',
+    '    lum = mix(vec3(Y), lum, clamp(0.767 + 0.3334*log(max(Y,1e-9))/log(10.0), 0.0, 1.0));',
+    '  }',
+    '  if (uLumOut > 0.5) {',             // luminance pass for eye adaptation: before exposure and tone mapping
+    '    if (uLumOut < 1.5) { gl_FragColor = vec4(lum, 1.0); return; }',
+    '    float q = floor(clamp((log2(max(dot(lum, vec3(0.2126,0.7152,0.0722)), 1e-9)) + 20.0) / 34.0, 0.0, 1.0) * 65535.0 + 0.5);',
+    '    gl_FragColor = vec4(floor(q / 256.0) / 255.0, mod(q, 256.0) / 255.0, 0.0, 1.0); return;',
+    '  }',
     '  vec3 col;',
     '  if (uMode > 0.5) {',
     '    float t = (log(max(es,1e-6))/log(10.0) + 1.0) / 3.0;',
     '    col = ramp(clamp(t,0.0,1.0)) * smoothstep(-0.25, 0.0, t) * (0.7 + 0.3*clamp(max(alb.r,max(alb.g,alb.b))*2.0,0.0,1.0));',
     '    col = max(col, alb*0.25);',
     '  } else {',
-    // Retroreflected luminance of sheeting: L = sum_k R_A(alpha_k, beta_k) E_perp,k / cos(v), with v the viewing angle
-    // (normal to eye). R_A is defined per unit sign area and the eye sees that area foreshortened by cos(v); v is held
-    // to at most 84 deg. Sheeting colour scales R_A by the texture colour's relative luminance (about 0.1 for blue and
-    // 0.15 for red, near the EN 12899-1 colour ratios for RA2). With the effect off the old constant is used: retro * E_perp.
-    '    vec3 retroL = sheet ? rc * era / max(dot(N, normalize(uEye - vWP)), 0.1) : rc * retro * ep;',
-    '    vec3 lum = (alb*(es/PI) + retroL) * uLight + alb*0.004;',
-    '    if (uMeso > 0.5) {',              // colour fades towards grey as each patch falls into mesopic and scotopic vision (CIE 191 m)
-    '      float Y = dot(lum, vec3(0.2126,0.7152,0.0722));',
-    '      lum = mix(vec3(Y), lum, clamp(0.767 + 0.3334*log(max(Y,1e-9))/log(10.0), 0.0, 1.0));',
-    '    }',   // cd/m2; last term is faint night-sky ambient
     '    col = pow(vec3(1.0) - exp(-lum*uExposure), vec3(1.0/2.2));',
     '  }',
     '  if (isGround && uIsoN > 0.5) {',                 // isolux lines: contours of ground illuminance, about 1 px wide
@@ -686,7 +711,7 @@ function lightRGB(src, D) {
     uExposure: { value: 1 }, uMode: { value: 0 }, uRoadW: { value: 7 },
     uIso: { value: [1, 1, 1, 1, 1, 1, 1, 1] }, uIsoN: { value: 0 },
     uLight: { value: new THREE.Vector3(1, 1, 1) }, uMeso: { value: 1 },
-    uEye: { value: new THREE.Vector3() }, uRAOn: { value: 1 }, uRA: { value: RA_TABLES.RA2.v.slice() },
+    uEye: { value: new THREE.Vector3() }, uRAOn: { value: 1 }, uLumOut: { value: 0 }, uRA: { value: RA_TABLES.RA2.v.slice() },
     uShadowMap: { value: null }, uShadowMat: { value: new THREE.Matrix4() }, uShadowOn: { value: 0 },
     uShadowNF: { value: new THREE.Vector2(0.8, 500) }, uShadowPx: { value: new THREE.Vector2(1 / 2048, 1 / 1024) }
   };
@@ -856,6 +881,29 @@ function lightRGB(src, D) {
     ribbon.visible = farG.visible = true; body.visible = bv; markers.visible = mv;
   }
 
+  // eye adaptation measured from a small luminance render of the driver's view (see frameAdaptation)
+  var lumCam = new THREE.PerspectiveCamera(LUM.vfov, LUM.aspect, 0.3, 1500), lumRT = null, lumFloat = false, lumBuf = null;
+  try {
+    lumFloat = !!renderer.getContext().getExtension('EXT_color_buffer_float');
+    lumRT = new THREE.WebGLRenderTarget(LUM.w, LUM.h, { type: lumFloat ? THREE.FloatType : THREE.UnsignedByteType,
+      minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+    lumBuf = lumFloat ? new Float32Array(LUM.w * LUM.h * 4) : new Uint8Array(LUM.w * LUM.h * 4);
+  } catch (e) { lumRT = null; }
+  var clearC = new THREE.Color();
+  function measureAdaptation() {
+    if (!lumRT) return 0;
+    lumCam.position.copy(shared.uEye.value); lumCam.up.copy(upv);
+    tmp.copy(lumCam.position).addScaledVector(fwd, 100).addScaledVector(upv, 100 * Math.tan(LUM.pitch * D2R)); lumCam.lookAt(tmp);
+    var bg = scene.background, mv = markers.visible, bv = body.visible, ca = renderer.getClearAlpha(); renderer.getClearColor(clearC);
+    scene.background = null; markers.visible = body.visible = false; renderer.setClearColor(0x000000, 0);   // no sky, no overlays
+    shared.uLumOut.value = lumFloat ? 1 : 2;
+    renderer.setRenderTarget(lumRT); renderer.render(scene, lumCam);
+    renderer.readRenderTargetPixels(lumRT, 0, 0, LUM.w, LUM.h, lumBuf);
+    renderer.setRenderTarget(null); shared.uLumOut.value = 0;
+    scene.background = bg; markers.visible = mv; body.visible = bv; renderer.setClearColor(clearC, ca);
+    return frameAdaptation(lumBuf, LUM.w, LUM.h, !lumFloat);
+  }
+
   // ---------- State ----------
   var cfg = { side: 'RHT', roadW: 7, lampH: 0.7, spacing: 1.2, eyeH: 1.2, eyeB: 2, eyeL: -0.37, aimV: 0, lb: true, hb: false, flip: false };
   var car = { x: 1.75, z: 0, psi: 0, v: 0, s: 0, lat: 1.75 };   // s, lat = position along and across the track
@@ -1012,6 +1060,8 @@ function lightRGB(src, D) {
     $('sheetNote').textContent = $('raOn').checked ? sheet + ': ' + t.src + (t.placeholder ? '. Replace with your sheeting data.' : '.') : 'Off: signs use one fixed coefficient, as before.';
   }
   seg('segSheet', function (v) { sheet = v; applySheet(); });
+  var adaptFrom = 'frame', frameLw = 0;
+  seg('segAdapt', function (v) { adaptFrom = v; });
   $('raOn').addEventListener('change', applySheet);
   seg('segMode', setMode); seg('segView', setView);
   seg('segCockpit', function (v) { cockpit = v; buildCockpit(); });
@@ -1127,7 +1177,7 @@ function lightRGB(src, D) {
   }
   if (window.ResizeObserver) new ResizeObserver(resize).observe(stage); else window.addEventListener('resize', resize);
 
-  var fwd = new THREE.Vector3(), right = new THREE.Vector3(), tmp = new THREE.Vector3(), last = performance.now(), driven = 0, adapt = 0, tick = 0;
+  var fwd = new THREE.Vector3(), right = new THREE.Vector3(), upv = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3(), last = performance.now(), driven = 0, adapt = 0, tick = 0;
   function frame(now) {
     var dt = Math.min(0.05, (now - last) / 1000); last = now;
     if (!paused) {
@@ -1162,8 +1212,12 @@ function lightRGB(src, D) {
     $('cockpit').hidden = cockpit === 'off' || view !== 'driver';
     if (ckSpeed) { ckSpeed.textContent = Math.round(car.v * 3.6); ckLow.setAttribute('opacity', cfg.lb ? 1 : 0.12); ckHigh.setAttribute('opacity', cfg.hb ? 1 : 0.12); }
     $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.lat - laneLat() >= 0 ? '+' : '') + (car.lat - laneLat()).toFixed(2) + ' m from lane centre';
-    // exposure: the eye adapts to the lit road ahead, quickly when it gets brighter and slowly when it gets darker
-    var Lw = adaptationLuminance(cfg, grids, cfg.roadW, car.lat);
+    renderShadows();
+    // exposure: the eye adapts to what it sees ahead, quickly when it gets brighter and slowly when it gets darker.
+    // Measured from the rendered view every 4th frame; the road estimate is the fallback.
+    var Lw = 0, fromView = false;
+    if (adaptFrom === 'frame' && lumRT) { if (tick % 4 === 0 || !(frameLw > 0)) frameLw = measureAdaptation(); Lw = frameLw; fromView = Lw > 0; }
+    if (!fromView) Lw = adaptationLuminance(cfg, grids, cfg.roadW, car.lat);
     adapt = adapt > 0 ? adapt * Math.pow(Lw / adapt, Math.min(1, dt / (Lw > adapt ? 0.4 : 1.5))) : Lw;
     // mesopic response (CIE 191): what the eye sees depends on the source S/P ratio at night adaptation levels
     var mesoOn = $('mesoOn').checked, meso = mesoOn ? mesopic(adapt, src.data.SP) : { L: adapt, m: 1 };
@@ -1173,10 +1227,9 @@ function lightRGB(src, D) {
     if (tick++ % 12 === 0) {
       var lc = lightRGB(src.data, $('chromAdapt').checked ? catDegree(meso.L) : 0); shared.uLight.value.set(lc[0], lc[1], lc[2]);
       var f2 = function (v) { return (v >= 1 ? v.toFixed(1) : v.toFixed(2)) + ' cd/m\u00b2'; };
-      $('adaptVal').textContent = f2(adapt);
+      $('adaptVal').textContent = f2(adapt) + (fromView ? ' \u00b7 view' : ' \u00b7 estimate');
       $('mesoVal').textContent = mesoOn ? f2(meso.L) + ' (\u00d7' + gain.toFixed(2) + ')' : 'off';
     }
-    renderShadows();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }
