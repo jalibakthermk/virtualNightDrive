@@ -162,6 +162,9 @@ kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);bor
       <div class="row"><label for="eyeH">Eye height <small>(m)</small></label><input type="number" id="eyeH" value="1.20" step="0.01" min="0.8" max="3"></div>
       <div class="row"><label for="eyeB">Eye behind lamps <small>(m)</small></label><input type="number" id="eyeB" value="2.00" step="0.05" min="0" max="6"></div>
       <div class="row"><label for="eyeL">Eye lateral offset <small>(m, + right)</small></label><input type="number" id="eyeL" value="-0.37" step="0.01" min="-1" max="1"></div>
+      <label class="check"><input type="checkbox" id="windOn" checked> Windscreen in the driver view</label>
+      <div class="row"><label for="windT">Windscreen transmission</label><input type="number" id="windT" value="0.80" step="0.01" min="0.5" max="1"></div>
+      <p class="note">Legal minimum 0.70 (UN R43, FMVSS 205). 0.80 is a placeholder; use your glazing data.</p>
     </section>
 
     <section>
@@ -344,6 +347,13 @@ var SURF = {
 // Wet-road mirror reflection: Fresnel reflectance of water (n = 1.33, Schlick: F0 = 0.02) at the viewing angle, times
 // WET_MIRROR, the share of the surface acting as a mirror (PLACEHOLDER 0.5: depends on water film depth and texture).
 var WET_MIRROR = 0.5, WET_SPREAD = 0.03;
+
+// ---------- Windscreen ----------
+// Luminous transmittance of the windscreen along the driver's line of sight. Legal minimum: 70 % regular transmittance
+// for windscreens (UN Regulation No. 43; FMVSS 205 / ANSI Z26.1 in the US). Default 0.80 is a PLACEHOLDER for a clear
+// laminated windscreen viewed at its rake angle, where surface reflection takes more than at normal incidence; use the
+// glazing supplier's value for the angle you need.
+var WINDSCREEN_T = 0.80;
 
 // ---------- Retroreflective sheeting ----------
 // Coefficient of retroreflection R_A (cd per lx per m2) of white sheeting, indexed [observation angle][entrance angle].
@@ -618,7 +628,7 @@ function lightRGB(src, D) {
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
     'uniform vec3 uAlbedo; uniform vec3 uLight; uniform float uMeso;',
     'uniform vec3 uEye; uniform float uRAOn; uniform float uRA[9]; uniform float uLumOut;',
-    'uniform float uRLRoad; uniform float uRLMark;',
+    'uniform float uRLRoad; uniform float uRLMark; uniform float uWind;',
     'uniform sampler2D uReflMap; uniform mat4 uReflMat; uniform float uReflOn; uniform float uReflK; uniform float uReflSpread;',
     'uniform float uIso[8]; uniform float uIsoN;',
     'uniform sampler2D uShadowMap; uniform mat4 uShadowMat; uniform float uShadowOn; uniform vec2 uShadowNF; uniform vec2 uShadowPx;',
@@ -725,6 +735,7 @@ function lightRGB(src, D) {
     '      lum += uReflK * (0.02 + 0.98 * pow(1.0 - cv, 5.0)) * refl / wsum;',
     '    }',
     '  }',
+    '  lum *= uWind;',                     // windscreen transmission: driver view only (1.0 elsewhere)
     '  if (uMeso > 0.5) {',              // colour fades towards grey as each patch falls into mesopic and scotopic vision (CIE 191 m)
     '    float Y = dot(lum, vec3(0.2126,0.7152,0.0722));',
     '    lum = mix(vec3(Y), lum, clamp(0.767 + 0.3334*log(max(Y,1e-9))/log(10.0), 0.0, 1.0));',
@@ -764,7 +775,7 @@ function lightRGB(src, D) {
     uIso: { value: [1, 1, 1, 1, 1, 1, 1, 1] }, uIsoN: { value: 0 },
     uLight: { value: new THREE.Vector3(1, 1, 1) }, uMeso: { value: 1 },
     uEye: { value: new THREE.Vector3() }, uRAOn: { value: 1 }, uLumOut: { value: 0 },
-    uRLRoad: { value: 0.015 }, uRLMark: { value: 0.15 },
+    uRLRoad: { value: 0.015 }, uRLMark: { value: 0.15 }, uWind: { value: 1 },
     uReflMap: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 }, uReflK: { value: WET_MIRROR }, uReflSpread: { value: WET_SPREAD }, uRA: { value: RA_TABLES.RA2.v.slice() },
     uShadowMap: { value: null }, uShadowMat: { value: new THREE.Matrix4() }, uShadowOn: { value: 0 },
     uShadowNF: { value: new THREE.Vector2(0.8, 500) }, uShadowPx: { value: new THREE.Vector2(1 / 2048, 1 / 1024) }
@@ -991,7 +1002,7 @@ function lightRGB(src, D) {
   }
 
   // ---------- State ----------
-  var cfg = { side: 'RHT', roadW: 7, lampH: 0.7, spacing: 1.2, eyeH: 1.2, eyeB: 2, eyeL: -0.37, aimV: 0, lb: true, hb: false, flip: false };
+  var cfg = { side: 'RHT', roadW: 7, lampH: 0.7, spacing: 1.2, eyeH: 1.2, eyeB: 2, eyeL: -0.37, aimV: 0, lb: true, hb: false, flip: false, wind: 1 };
   var car = { x: 1.75, y: 0, z: 0, g: 0, psi: 0, v: 0, s: 0, lat: 1.75 };   // s, lat = position along and across the track
   var view = 'driver', paused = window.matchMedia('(prefers-reduced-motion: reduce)').matches, steer = 0, keys = {};
   var files = { lbL: null, lbR: null, hbL: null, hbR: null };   // parsed IES + name
@@ -1067,6 +1078,7 @@ function lightRGB(src, D) {
     cfg.roadW = num('roadW', 4, 16, 7); cfg.lampH = num('lampH', 0.3, 1.5, 0.7); cfg.spacing = num('lampS', 0.4, 2.4, 1.2);
     cfg.eyeH = num('eyeH', 0.8, 3, 1.2); cfg.eyeB = num('eyeB', 0, 6, 2); cfg.eyeL = num('eyeL', -1, 1, -0.37);
     cfg.aimV = num('aimV', -5, 5, 0);
+    cfg.wind = $('windOn').checked ? num('windT', 0.5, 1, WINDSCREEN_T) : 1;
     shared.uRoadW.value = cfg.roadW; shared.uAim.value.set(0, cfg.aimV);
     cfg.ev = parseFloat($('exposure').value);
     $('exposureVal').textContent = (parseFloat($('exposure').value) >= 0 ? '+' : '') + parseFloat($('exposure').value).toFixed(1);
@@ -1077,6 +1089,7 @@ function lightRGB(src, D) {
   }
   ['roadW', 'lampH', 'lampS', 'eyeH', 'eyeB', 'eyeL', 'aimV', 'exposure', 'speed'].forEach(function (id) { $(id).addEventListener('input', readInputs); });
   $('flipH').addEventListener('change', function () { cfg.flip = this.checked; rebuildBeams(); });
+  $('windT').addEventListener('change', readInputs); $('windOn').addEventListener('change', readInputs);
 
   // comma separated number lists; the box is rewritten with what was understood
   function parseList(id, lo, hi, max) {
@@ -1194,7 +1207,7 @@ function lightRGB(src, D) {
     var finish = function () {
     var beams = ([cfg.lb ? 'Low beam' : null, cfg.hb ? 'High beam' : null].filter(Boolean).join(' + ') || 'Lamps off') + ' \u00b7 ' + SOURCES[src.key].label + ' ' + Math.round(src.data.cct) + ' K';
     var lines = [
-      'Virtual Driver \u00b7 ' + beams + ' \u00b7 ' + cfg.side + ' \u00b7 road ' + cfg.roadW.toFixed(1) + ' m \u00b7 lamps ' + cfg.lampH.toFixed(2) + ' m high, ' + cfg.spacing.toFixed(2) + ' m apart \u00b7 eye ' + cfg.eyeH.toFixed(2) + ' m',
+      'Virtual Driver \u00b7 ' + beams + ' \u00b7 ' + cfg.side + ' \u00b7 road ' + cfg.roadW.toFixed(1) + ' m \u00b7 lamps ' + cfg.lampH.toFixed(2) + ' m high, ' + cfg.spacing.toFixed(2) + ' m apart \u00b7 eye ' + cfg.eyeH.toFixed(2) + ' m \u00b7 ' + (cfg.wind < 1 ? 'windscreen ' + cfg.wind.toFixed(2) : 'no windscreen'),
       'Road illuminance ahead' + (PROFILE.on ? ' (flat road)' : '') + ': ' + [25, 50, 75, 100].map(function (d) { return d + ' m ' + fmtLx(roadIlluminance(d, 0, cfg, grids)); }).join(', ') +
         (shared.uIsoN.value > 0 ? ' \u00b7 isolux ' + shared.uIso.value.slice(0, shared.uIsoN.value).join(', ') + ' lx' : '') +
         ' \u00b7 adaptation ' + adapt.toFixed(2) + ' cd/m\u00b2 \u00b7 S/P ' + src.data.SP.toFixed(2)
@@ -1319,12 +1332,15 @@ function lightRGB(src, D) {
     if (ckSpeed) { ckSpeed.textContent = Math.round(car.v * 3.6); ckLow.setAttribute('opacity', cfg.lb ? 1 : 0.12); ckHigh.setAttribute('opacity', cfg.hb ? 1 : 0.12); }
     $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.lat - laneLat() >= 0 ? '+' : '') + (car.lat - laneLat()).toFixed(2) + ' m from lane centre';
     renderShadows();
+    shared.uWind.value = 1;                                   // reflections are scene luminance outside the glass
     renderReflections(surf === 'wet' && view === 'driver');
+    shared.uWind.value = cfg.wind;                            // the eye adapts to what comes through the windscreen
     // exposure: the eye adapts to what it sees ahead, quickly when it gets brighter and slowly when it gets darker.
     // Measured from the rendered view every 4th frame; the road estimate is the fallback.
     var Lw = 0, fromView = false;
     if (adaptFrom === 'frame' && lumRT) { if (tick % 4 === 0 || !(frameLw > 0)) frameLw = measureAdaptation(); Lw = frameLw; fromView = Lw > 0; }
-    if (!fromView) Lw = adaptationLuminance(cfg, grids, cfg.roadW, car.lat);
+    if (!fromView) Lw = adaptationLuminance(cfg, grids, cfg.roadW, car.lat) * cfg.wind;
+    shared.uWind.value = view === 'driver' ? cfg.wind : 1;
     adapt = adapt > 0 ? adapt * Math.pow(Lw / adapt, Math.min(1, dt / (Lw > adapt ? 0.4 : 1.5))) : Lw;
     // mesopic response (CIE 191): what the eye sees depends on the source S/P ratio at night adaptation levels
     var mesoOn = $('mesoOn').checked, meso = mesoOn ? mesopic(adapt, src.data.SP) : { L: adapt, m: 1 };
