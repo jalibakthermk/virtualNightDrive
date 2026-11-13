@@ -6,190 +6,301 @@
 <style>body{margin:0}[hidden]{display:none!important}</style>
 <title>Virtual Driver</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@600;700&family=Source+Sans+3:wght@400;600&display=swap">
 <style>
-/* Layout: night road fills the stage; an instrument-style setup panel sits beside it (below it on a phone). */
+/* Bench layout from Beam Synth: a settings rail on the left in collapsible groups that show their state when closed,
+   and the driving view on the right as a dark plot card with its view controls in the bar. The view is always dark;
+   everything else follows the light or dark theme. */
 :root{
-  color-scheme:dark;
-  --bg:#070a10; --panel:#0d121b; --raise:#151c28; --line:#232d3d;
-  --fg:#dbe2ec; --muted:#8793a6;
-  --amber:#f2b84b; --low:#3ddc84; --high:#4aa8ff; --bad:#ff7a6b;
-  --text:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --cond:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --bg:#f3f5f6; --surface:#ffffff; --sunk:#e9edf0; --ink:#15212b; --muted:#55656f; --line:#d5dce1; --line-soft:#e6ebee;
+  --accent:#9a5600; --accent-ink:#ffffff; --accent-soft:#f7e9d3; --fail:#c0332a;
+  --plot-bg:#0d151d; --plot-ink:#c7d4de; --plot-dim:#8494a1; --plot-line:rgba(199,212,222,.18); --plot-glass:rgba(13,21,29,.74);
+  --plot-accent:#f0a43a; --low:#3ddc84; --high:#4aa8ff; --plot-bad:#ff6b5d;
+  --f-display:"Saira Semi Condensed","Arial Narrow",sans-serif;
+  --f-body:"Source Sans 3","Segoe UI",system-ui,sans-serif;
+  --f-mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
 }
-html,body{height:100%}
-body{background:var(--bg);color:var(--fg);font-family:var(--text);font-size:14px;line-height:1.4;overflow:hidden}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0b1117; --surface:#121b23; --sunk:#0c141b; --ink:#e3e9ee; --muted:#93a3af; --line:#25343f; --line-soft:#1b2832;
+  --accent:#f0a43a; --accent-ink:#1b1206; --accent-soft:#33260f; --fail:#ff6b5d; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0b1117; --surface:#121b23; --sunk:#0c141b; --ink:#e3e9ee; --muted:#93a3af; --line:#25343f; --line-soft:#1b2832;
+  --accent:#f0a43a; --accent-ink:#1b1206; --accent-soft:#33260f; --fail:#ff6b5d; color-scheme:dark;}
 *{box-sizing:border-box}
-.app{display:grid;grid-template-columns:minmax(0,1fr) 340px;height:100%}
-.stage{position:relative;min-width:0;min-height:0;background:#04060b;overflow:hidden}
-.stage canvas{display:block;width:100%;height:100%}
-.panel{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;min-width:0;
-  padding-block:14px 24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
-  display:flex;flex-direction:column;gap:18px}
-@media (max-width:760px){
-  .app{grid-template-columns:minmax(0,1fr);grid-template-rows:44% minmax(0,1fr)}
-  .panel{border-left:0;border-top:1px solid var(--line)}
-}
-h1{font-family:var(--cond);font-weight:600;font-size:22px;letter-spacing:.02em;margin:0;line-height:1.1}
-.sub{color:var(--muted);margin:2px 0 0;font-size:13px}
-h2{font-family:var(--cond);font-weight:600;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin:0 0 8px}
-section{display:flex;flex-direction:column;gap:8px}
-.row{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:10px;align-items:center}
-.row label{color:var(--fg)}
-.row small{color:var(--muted)}
-input[type=number],input[type=text]{width:100%;background:var(--raise);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:6px 8px;font:inherit;font-variant-numeric:tabular-nums}
-input[type=range]{width:100%;accent-color:var(--amber)}
-input[type=checkbox]{accent-color:var(--amber);width:16px;height:16px}
-:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
-.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}
-.seg button{background:var(--raise);color:var(--muted);border:0;padding:8px 6px;font:inherit;font-weight:500;cursor:pointer}
-.seg button+button{border-left:1px solid var(--line)}
-.seg button[aria-pressed=true]{background:var(--amber);color:#1a1204}
-.check{display:flex;align-items:center;gap:8px}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;font-variant-numeric:tabular-nums;overflow:hidden;
+  padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px));padding-block:12px}
+.wrap{max-width:1600px;height:100%;margin:0 auto}
+.bench{display:grid;grid-template-columns:372px minmax(0,1fr);gap:16px;height:100%}
+
+/* ---- control rail ---- */
+aside{background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+aside header{padding:12px 14px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:32px;height:32px;flex:none}
+h1{font-family:var(--f-display);font-weight:700;font-size:22px;letter-spacing:.01em;margin:0;line-height:1}
+.sub{color:var(--muted);margin:3px 0 0;font-size:13px;line-height:1.3}
+.rail-body{overflow-y:auto;overscroll-behavior:contain;padding:4px 14px 14px;min-height:0}
+.secs{display:flex;flex-direction:column}
+details.sec{border-bottom:1px solid var(--line-soft)}
+details.sec:last-child{border-bottom:0}
+details.sec>summary{list-style:none;display:flex;align-items:baseline;gap:10px;padding:11px 2px 11px 18px;cursor:pointer;position:relative;user-select:none}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::before{content:"";position:absolute;left:3px;top:50%;width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:translateY(-70%) rotate(-45deg);transition:transform .15s}
+details.sec[open]>summary::before{transform:translateY(-85%) rotate(45deg)}
+details.sec>summary:hover .st{color:var(--accent)}
+.st{font-weight:600;font-size:14.5px;color:var(--ink);flex:none}
+.sv{font-size:13px;color:var(--muted);margin-left:auto;text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.sec[open] .sv{visibility:hidden}
+.sb{display:flex;flex-direction:column;gap:10px;padding:2px 0 16px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:13.5px;color:var(--muted);min-width:0}
+label.f small,.kvrow small{font-size:12.5px;color:var(--muted)}
+input[type=number],input[type=text]{font:15px var(--f-body);font-variant-numeric:tabular-nums;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:7px 9px;width:100%;min-width:0}
+input[type=number]:hover,input[type=text]:hover{border-color:var(--muted)}
+input[type=range]{width:100%;padding:0;margin:0;background:transparent;border:0;accent-color:var(--accent);height:26px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.qhead{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.sval{font:600 15px var(--f-body);color:var(--ink)}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);background:var(--sunk);border-radius:7px;padding:3px;gap:3px}
+.seg button{font:600 14px var(--f-body);border:0;border-radius:5px;padding:7px 6px;background:transparent;color:var(--muted);cursor:pointer;min-width:0}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.chk{display:flex;align-items:center;gap:8px;font-size:14.5px;cursor:pointer}
+.chk input{width:17px;height:17px;accent-color:var(--accent);flex:none;margin:0}
+.kvrow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:13.5px;color:var(--muted)}
+.kvrow .val{font:600 15px var(--f-body);color:var(--ink);text-align:right}
+.note{font-size:13px;line-height:1.45;color:var(--muted);margin:0}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid var(--line);vertical-align:-1px;margin-right:6px}
-.stack{display:flex;flex-direction:column;gap:4px}
-.stack small{color:var(--muted)}
-.slot{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;background:var(--raise);border:1px solid var(--line);border-radius:4px;padding:7px 8px}
-.slot b{font-weight:500;display:block}
-.slot span{color:var(--muted);font-size:12px;display:block;overflow-wrap:anywhere}
-.slot span.err{color:var(--bad)}
-.btn{background:transparent;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:6px 10px;font:inherit;cursor:pointer}
-.btn:hover{border-color:var(--amber)}
+.slot{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;border:1.5px dashed var(--line);border-radius:7px;padding:8px 10px;background:var(--sunk)}
+.slot:hover{border-color:var(--accent)}
+.slot:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+.slot b{font-weight:600;font-size:14.5px;display:block}
+.slot span{color:var(--muted);font-size:13px;display:block;overflow-wrap:anywhere}
+.slot span.err{color:var(--fail)}
 .slot input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-.note{color:var(--muted);font-size:12px;margin:0}
-.val{font-variant-numeric:tabular-nums;color:var(--muted);text-align:right}
-/* stage overlays */
-.hud{position:absolute;top:10px;left:max(12px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:6px;pointer-events:none;font-variant-numeric:tabular-nums}
-.speed{font-family:var(--cond);font-weight:600;font-size:34px;line-height:1;color:#fff;text-shadow:0 1px 4px #000}
-.speed small{font-size:14px;color:var(--muted);font-weight:500;margin-left:4px}
-.hud .meta{font-size:12px;color:var(--muted);text-shadow:0 1px 3px #000}
-.side{position:absolute;top:10px;right:max(12px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:6px;width:max-content;max-width:48%}
-.probe{background:rgba(7,10,16,.72);border:1px solid var(--line);border-radius:4px;padding:6px 9px;font-size:12px;font-variant-numeric:tabular-nums;pointer-events:none}
-.probe b{display:block;font-family:var(--cond);letter-spacing:.1em;text-transform:uppercase;font-size:11px;color:var(--amber);font-weight:600;margin-bottom:2px}
-.probe div{display:flex;justify-content:space-between;gap:14px}
-.probe div span:last-child{color:#fff}
-.tell{display:flex;flex-direction:column;gap:6px}
-.savemsg{font-size:11px;color:var(--muted);margin:0;max-width:150px;text-shadow:0 1px 3px #000}
-.tell button{background:rgba(7,10,16,.72);border:1px solid var(--line);color:var(--muted);border-radius:4px;padding:7px 11px;font:inherit;font-weight:500;cursor:pointer}
-.tell button[aria-pressed=true].lowb{color:var(--low);border-color:var(--low)}
-.tell button[aria-pressed=true].highb{color:var(--high);border-color:var(--high)}
-.tell button.plain{color:var(--fg)}
-.steer{position:absolute;bottom:10px;width:44px;height:44px;border-radius:50%;background:rgba(7,10,16,.72);border:1px solid var(--line);color:var(--fg);font-size:18px;cursor:pointer;touch-action:none;user-select:none}
-#steerL{left:max(12px,env(safe-area-inset-left,0px))}
-#steerR{right:max(12px,env(safe-area-inset-right,0px))}
-.legend{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:64px;width:150px;font-size:11px;color:var(--fg);font-variant-numeric:tabular-nums;pointer-events:none}
+.btn{font:600 14px var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:5px;padding:7px 12px;cursor:pointer;align-self:start}
+.btn:hover{border-color:var(--muted)}
+kbd{font:12px var(--f-mono);background:var(--sunk);border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--ink)}
+
+/* ---- the view: a dark plot card ---- */
+main{min-width:0;min-height:0;display:flex;flex-direction:column}
+.screen{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;min-width:0;min-height:0;display:flex;flex-direction:column;flex:1}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.bar .seg{flex:0 1 auto}
+.bar .seg button{padding:6px 12px;white-space:nowrap}
+.stage{position:relative;flex:1;min-height:0;background:var(--plot-bg);overflow:hidden;color:var(--plot-ink)}
+.stage canvas{display:block;width:100%;height:100%}
+.foot{display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:space-between;align-items:center;padding:8px 14px;background:var(--plot-bg);color:var(--plot-ink);border-top:1px solid rgba(255,255,255,.07);min-height:38px}
+.readout{font-size:13.5px}
+.keys{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px}
+.legend{width:170px;font-size:12px;color:var(--plot-dim)}
 .legend i{display:block;height:8px;border-radius:2px;background:linear-gradient(90deg,#1b2a8c,#17a6c4,#35b657,#f2d13a,#e8402a)}
 .legend div{display:flex;justify-content:space-between;margin-top:2px}
-.isokey{position:absolute;left:max(12px,env(safe-area-inset-left,0px));bottom:100px;display:flex;flex-direction:column;gap:2px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;text-shadow:0 1px 3px #000}
-.isokey span{display:flex;align-items:center;gap:6px}
+.isokey{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12.5px;color:var(--plot-dim)}
+.isokey span{display:flex;align-items:center;gap:5px}
 .isokey i{display:block;width:14px;height:3px;border-radius:1px}
+/* overlays on the view */
+.hud{position:absolute;top:10px;left:12px;pointer-events:none}
+.speed{font:700 34px/1 var(--f-display);color:#fff;text-shadow:0 1px 4px #000}
+.speed small{font:600 14px var(--f-body);color:var(--plot-dim);margin-left:4px}
+.side{position:absolute;top:10px;right:12px;display:flex;flex-direction:column;gap:6px;width:max-content;max-width:48%}
+.probe:empty{display:none}
+.probe{background:var(--plot-glass);border:1px solid var(--plot-line);border-radius:7px;padding:7px 10px;font-size:13px;pointer-events:none}
+.probe b{display:block;font:600 13px var(--f-display);letter-spacing:.04em;color:var(--plot-accent);margin-bottom:2px}
+.probe div{display:flex;justify-content:space-between;gap:14px}
+.probe div span:last-child{color:#fff;font-weight:600}
+.tell{display:flex;flex-direction:column;gap:6px}
+.tell button{font:600 14px var(--f-body);background:var(--plot-glass);border:1px solid var(--plot-line);color:var(--plot-dim);border-radius:5px;padding:7px 12px;cursor:pointer}
+.tell button:hover{border-color:var(--plot-ink)}
+.tell button[aria-pressed=true].lowb{color:var(--low);border-color:var(--low)}
+.tell button[aria-pressed=true].highb{color:var(--high);border-color:var(--high)}
+.tell button.plain{color:var(--plot-ink)}
+.savemsg{font-size:12.5px;color:var(--plot-dim);margin:0;max-width:160px;text-shadow:0 1px 3px #000}
+.steer{position:absolute;bottom:10px;width:44px;height:44px;border-radius:50%;background:var(--plot-glass);border:1px solid var(--plot-line);color:var(--plot-ink);font-size:18px;cursor:pointer;touch-action:none;user-select:none}
+#steerL{left:12px}
+#steerR{right:12px}
 .cockpit{position:absolute;inset:0;pointer-events:none}
 .cockpit svg{display:block;width:100%;height:100%}
-.fail{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--bad)}
-kbd{font-family:inherit;background:var(--raise);border:1px solid var(--line);border-radius:3px;padding:0 5px;font-size:12px}
+.fail{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--plot-bad)}
+
+@media (max-width:900px){
+  /* the view stays on screen while the settings scroll beneath it */
+  body{padding-block:8px}
+  .bench{grid-template-columns:minmax(0,1fr);grid-template-rows:48% minmax(0,1fr);gap:10px}
+  main{order:-1}
+  .bar{padding:8px 10px;gap:6px}
+  .bar .seg button{padding:5px 8px;font-size:13px}
+  .foot{padding:6px 10px;min-height:0}
+}
+@media (max-width:640px){
+  .bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .bar .seg:last-child{grid-column:1 / -1}
+  .bar .seg button{padding:5px 4px;white-space:normal;line-height:1.15}
+  input[type=number],input[type=text]{font-size:16px}   /* 16 px keeps phone browsers from zooming into a focused field */
+  .speed{font-size:28px}
+}
+@media (prefers-reduced-motion:reduce){details.sec>summary::before{transition:none}}
 </style>
 </head>
 <body>
 
-<div class="app">
-  <div class="stage" id="stage">
-    <div class="cockpit" id="cockpit" hidden></div>
-    <div class="hud">
-      <div class="speed"><span id="hudSpeed">0</span><small>km/h</small></div>
-      <div class="meta" id="hudMeta">0 m driven</div>
-    </div>
-    <div class="side">
-      <div class="probe" id="probe" aria-live="off"></div>
-      <div class="tell">
-        <button id="btnLow" class="lowb" aria-pressed="true">Low beam</button>
-        <button id="btnHigh" class="highb" aria-pressed="false">High beam</button>
-        <button id="btnPause" class="plain">Pause</button>
-        <button id="btnSave" class="plain" hidden>Save PNG</button>
-        <p class="savemsg" id="saveMsg" role="status" hidden></p>
+<div class="wrap">
+<div class="bench">
+<aside aria-label="Drive settings" id="rail">
+  <header>
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 48 48" aria-hidden="true">
+        <defs><clipPath id="vdRoad"><path d="M3 45 L21 23 H27 L45 45 Z"/></clipPath></defs>
+        <rect x="1.5" y="1.5" width="45" height="45" rx="9" fill="var(--plot-bg)"/>
+        <path d="M3 45 L21 23 H27 L45 45 Z" fill="#26323d"/>
+        <g clip-path="url(#vdRoad)">
+          <ellipse cx="25" cy="39" rx="17" ry="8" fill="#1c5c8c"/>
+          <ellipse cx="25.5" cy="37.5" rx="11" ry="5.2" fill="#179498"/>
+          <ellipse cx="26" cy="36" rx="6.5" ry="3.2" fill="#d6d046"/>
+          <ellipse cx="26.2" cy="35.2" rx="3" ry="1.6" fill="#e24e3a"/>
+        </g>
+        <path d="M24 26 V28.5 M24 31.5 V35 M24 38.5 V43" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M5 23 H43" stroke="var(--plot-accent)" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h1>Virtual Driver</h1>
+        <p class="sub">Night drive lit by your headlamp IES files.</p>
       </div>
     </div>
-    <div class="isokey" id="isoKey" hidden></div>
-    <div class="legend" id="legend" hidden><i></i><div><span>0.1</span><span>1</span><span>10</span><span>100 lx</span></div></div>
-    <button class="steer" id="steerL" aria-label="Steer left">&#9664;</button>
-    <button class="steer" id="steerR" aria-label="Steer right">&#9654;</button>
-    <div class="fail" id="fail" hidden></div>
-  </div>
+  </header>
+  <div class="rail-body">
+  <div class="secs">
 
-  <div class="panel">
-    <header>
-      <h1>Virtual Driver</h1>
-      <p class="sub">Night drive lit by your headlamp IES files.</p>
-    </header>
-
-    <section>
-      <h2>Display</h2>
-      <div class="seg" id="segMode"><button data-v="0" aria-pressed="true">Night view</button><button data-v="1" aria-pressed="false">Illuminance (lx)</button></div>
-      <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
-      <div class="seg" id="segCockpit"><button data-v="off" aria-pressed="false">No cockpit</button><button data-v="car" aria-pressed="true">Car</button><button data-v="truck" aria-pressed="false">Truck</button></div>
-      <label class="check"><input type="checkbox" id="autoExp" checked> Auto exposure from eye adaptation</label>
+  <details class="sec" open>
+    <summary><span class="st">Display</span><span class="sv" id="svDisp"></span></summary>
+    <div class="sb">
+      <label class="chk"><input type="checkbox" id="autoExp" checked> Auto exposure from eye adaptation</label>
       <div class="seg" id="segAdapt"><button data-v="frame" aria-pressed="true">Adapt to rendered view</button><button data-v="road" aria-pressed="false" id="adaptEst">Road estimate</button></div>
-      <div class="row"><span>Adaptation luminance</span><span class="val" id="adaptVal">&ndash;</span></div>
-      <div class="row"><span>Mesopic luminance</span><span class="val" id="mesoVal">&ndash;</span></div>
-      <div class="row"><label for="exposure">Exposure trim <small>(EV)</small></label><span class="val" id="exposureVal">0.0</span></div>
-      <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0">
-      <label class="check"><input type="checkbox" id="shadows" checked> Shadows from trees, posts and signs</label>
-      <label class="check"><input type="checkbox" id="markers" checked> Distance markers</label>
-      <div class="stack"><label for="markerList">Marker distances <small>(m, comma separated)</small></label><input type="text" id="markerList" value="25, 50, 75, 100, 150, 200" inputmode="decimal" autocomplete="off"></div>
-      <label class="check"><input type="checkbox" id="isoOn" checked> Isolux lines on the road</label>
-      <div class="stack"><label for="isoList">Isolux levels <small>(lx, comma separated)</small></label><input type="text" id="isoList" value="1, 3, 10" inputmode="decimal" autocomplete="off"></div>
-    </section>
+      <div class="kvrow"><span>Adaptation luminance</span><span class="val" id="adaptVal">&ndash;</span></div>
+      <div class="kvrow"><span>Mesopic luminance</span><span class="val" id="mesoVal">&ndash;</span></div>
+      <label class="f"><span class="qhead"><span>Exposure trim <small>(EV)</small></span><span class="sval" id="exposureVal">0.0</span></span>
+        <input type="range" id="exposure" min="-4" max="4" step="0.1" value="0"></label>
+      <label class="chk"><input type="checkbox" id="shadows" checked> Shadows from trees, posts and signs</label>
+      <label class="chk"><input type="checkbox" id="markers" checked> Distance markers</label>
+      <label class="f"><span>Marker distances <small>(m, comma separated)</small></span><input type="text" id="markerList" value="25, 50, 75, 100, 150, 200" inputmode="decimal" autocomplete="off"></label>
+      <label class="chk"><input type="checkbox" id="isoOn" checked> Isolux lines on the road</label>
+      <label class="f"><span>Isolux levels <small>(lx, comma separated)</small></span><input type="text" id="isoList" value="1, 3, 10" inputmode="decimal" autocomplete="off"></label>
+    </div>
+  </details>
 
-    <section>
-      <h2>Photometry</h2>
+  <details class="sec" open>
+    <summary><span class="st">Photometry</span><span class="sv" id="svPhot"></span></summary>
+    <div class="sb">
       <div class="seg" id="segSrc"><button data-v="halogen" aria-pressed="false">Halogen</button><button data-v="hid" aria-pressed="false">HID</button><button data-v="led" aria-pressed="true">LED</button></div>
-      <div class="row"><label for="cct">Colour temperature <small>(K)</small></label><input type="number" id="cct" value="5700" step="100" min="5000" max="6500"></div>
+      <div class="row2">
+        <label class="f"><span>Colour temperature <small>(K)</small></span><input type="number" id="cct" value="5700" step="100" min="5000" max="6500"></label>
+        <label class="f"><span>Vertical aim offset <small>(&deg;, + up)</small></span><input type="number" id="aimV" value="0" step="0.1" min="-5" max="5"></label>
+      </div>
       <p class="note"><i class="swatch" id="srcSwatch"></i><span id="srcInfo"></span></p>
-      <label class="check"><input type="checkbox" id="chromAdapt" checked> Eye colour adaptation</label>
-      <label class="check"><input type="checkbox" id="mesoOn" checked> Mesopic vision (night brightness and colour)</label>
+      <label class="chk"><input type="checkbox" id="chromAdapt" checked> Eye colour adaptation</label>
+      <label class="chk"><input type="checkbox" id="mesoOn" checked> Mesopic vision (night brightness and colour)</label>
       <div class="slot"><div><b>Low beam, left lamp</b><span id="lbL_s"></span></div><label class="btn" for="lbL_f">Load</label><button class="btn" data-clear="lbL" aria-label="Remove low beam left file">&times;</button><input type="file" id="lbL_f" data-slot="lbL"></div>
       <div class="slot"><div><b>Low beam, right lamp</b><span id="lbR_s"></span></div><label class="btn" for="lbR_f">Load</label><button class="btn" data-clear="lbR" aria-label="Remove low beam right file">&times;</button><input type="file" id="lbR_f" data-slot="lbR"></div>
       <div class="slot"><div><b>High beam, left lamp</b><span id="hbL_s"></span></div><label class="btn" for="hbL_f">Load</label><button class="btn" data-clear="hbL" aria-label="Remove high beam left file">&times;</button><input type="file" id="hbL_f" data-slot="hbL"></div>
       <div class="slot"><div><b>High beam, right lamp</b><span id="hbR_s"></span></div><label class="btn" for="hbR_f">Load</label><button class="btn" data-clear="hbR" aria-label="Remove high beam right file">&times;</button><input type="file" id="hbR_f" data-slot="hbR"></div>
       <p class="note">One file per function is enough: it is used for both lamps. With no file, a built-in demo beam is shown.</p>
-      <div class="row"><label for="aimV">Vertical aim offset <small>(&deg;, + up)</small></label><input type="number" id="aimV" value="0" step="0.1" min="-5" max="5"></div>
-      <label class="check"><input type="checkbox" id="flipH"> Mirror H axis of loaded files</label>
-    </section>
+      <label class="chk"><input type="checkbox" id="flipH"> Mirror H axis of loaded files</label>
+    </div>
+  </details>
 
-    <section>
-      <h2>Vehicle</h2>
-      <div class="row"><label for="lampH">Lamp mounting height <small>(m)</small></label><input type="number" id="lampH" value="0.70" step="0.01" min="0.3" max="1.5"></div>
-      <div class="row"><label for="lampS">Lamp spacing, centre to centre <small>(m)</small></label><input type="number" id="lampS" value="1.20" step="0.01" min="0.4" max="2.4"></div>
-      <div class="row"><label for="eyeH">Eye height <small>(m)</small></label><input type="number" id="eyeH" value="1.20" step="0.01" min="0.8" max="3"></div>
-      <div class="row"><label for="eyeB">Eye behind lamps <small>(m)</small></label><input type="number" id="eyeB" value="2.00" step="0.05" min="0" max="6"></div>
-      <div class="row"><label for="eyeL">Eye lateral offset <small>(m, + right)</small></label><input type="number" id="eyeL" value="-0.37" step="0.01" min="-1" max="1"></div>
-      <label class="check"><input type="checkbox" id="windOn" checked> Windscreen in the driver view</label>
-      <div class="row"><label for="windT">Windscreen transmission</label><input type="number" id="windT" value="0.80" step="0.01" min="0.5" max="1"></div>
+  <details class="sec">
+    <summary><span class="st">Vehicle</span><span class="sv" id="svVeh"></span></summary>
+    <div class="sb">
+      <div class="row2">
+        <label class="f"><span>Lamp mounting height <small>(m)</small></span><input type="number" id="lampH" value="0.70" step="0.01" min="0.3" max="1.5"></label>
+        <label class="f"><span>Lamp spacing, centre to centre <small>(m)</small></span><input type="number" id="lampS" value="1.20" step="0.01" min="0.4" max="2.4"></label>
+      </div>
+      <div class="row2">
+        <label class="f"><span>Eye height <small>(m)</small></span><input type="number" id="eyeH" value="1.20" step="0.01" min="0.8" max="3"></label>
+        <label class="f"><span>Eye behind lamps <small>(m)</small></span><input type="number" id="eyeB" value="2.00" step="0.05" min="0" max="6"></label>
+      </div>
+      <div class="row2">
+        <label class="f"><span>Eye lateral offset <small>(m, + right)</small></span><input type="number" id="eyeL" value="-0.37" step="0.01" min="-1" max="1"></label>
+        <label class="f"><span>Windscreen transmission</span><input type="number" id="windT" value="0.80" step="0.01" min="0.5" max="1"></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="windOn" checked> Windscreen in the driver view</label>
       <p class="note">Legal minimum 0.70 (UN R43, FMVSS 205). 0.80 is a placeholder; use your glazing data.</p>
-    </section>
+    </div>
+  </details>
 
-    <section>
-      <h2>Road</h2>
+  <details class="sec">
+    <summary><span class="st">Road</span><span class="sv" id="svRoad"></span></summary>
+    <div class="sb">
       <div class="seg" id="segSide"><button data-v="RHT" aria-pressed="true">RHT</button><button data-v="LHT" aria-pressed="false">LHT</button></div>
-      <div class="row"><label for="roadW">Road width, two lanes <small>(m)</small></label><input type="number" id="roadW" value="7.0" step="0.1" min="4" max="16"></div>
-      <label class="check"><input type="checkbox" id="flatRoad"> Flat road (no crests or dips)</label>
+      <div class="row2">
+        <label class="f"><span>Road width, two lanes <small>(m)</small></span><input type="number" id="roadW" value="7.0" step="0.1" min="4" max="16"></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="flatRoad"> Flat road (no crests or dips)</label>
       <div class="seg" id="segSurf"><button data-v="dry" aria-pressed="true">Dry</button><button data-v="wet" aria-pressed="false">Wet</button></div>
-      <div class="row"><label for="rlRoad">Road surface R<sub>L</sub> <small>(mcd/m&sup2;/lx)</small></label><input type="number" id="rlRoad" value="15" step="1" min="1" max="100"></div>
-      <div class="row"><label for="rlMark">Marking R<sub>L</sub> <small>(mcd/m&sup2;/lx)</small></label><input type="number" id="rlMark" value="150" step="5" min="10" max="600"></div>
+      <div class="row2">
+        <label class="f"><span>Road surface R<sub>L</sub> <small>(mcd/m&sup2;/lx)</small></span><input type="number" id="rlRoad" value="15" step="1" min="1" max="100"></label>
+        <label class="f"><span>Marking R<sub>L</sub> <small>(mcd/m&sup2;/lx)</small></span><input type="number" id="rlMark" value="150" step="5" min="10" max="600"></label>
+      </div>
       <p class="note" id="surfNote"></p>
-      <label class="check"><input type="checkbox" id="raOn" checked> Sign brightness by observation angle</label>
+      <label class="chk"><input type="checkbox" id="raOn" checked> Sign brightness by observation angle</label>
       <div class="seg" id="segSheet"><button data-v="RA1" aria-pressed="false">RA1</button><button data-v="RA2" aria-pressed="true">RA2</button><button data-v="RA3" aria-pressed="false">RA3</button></div>
-      <div class="row"><span>Observation angle at 100 m <small>(left / right lamp)</small></span><span class="val" id="obsVal">&ndash;</span></div>
+      <div class="kvrow"><span>Observation angle at 100 m <small>(left / right lamp)</small></span><span class="val" id="obsVal">&ndash;</span></div>
       <p class="note" id="sheetNote"></p>
+    </div>
+  </details>
 
-    <section>
-      <h2>Driving</h2>
-      <div class="row"><label for="speed">Set speed</label><span class="val" id="speedVal">60 km/h</span></div>
-      <input type="range" id="speed" min="0" max="130" step="5" value="60">
-      <label class="check"><input type="checkbox" id="auto" checked> Lane keeping</label>
+  <details class="sec">
+    <summary><span class="st">Driving</span><span class="sv" id="svDrive"></span></summary>
+    <div class="sb">
+      <label class="f"><span class="qhead"><span>Set speed</span><span class="sval" id="speedVal">60 km/h</span></span>
+        <input type="range" id="speed" min="0" max="130" step="5" value="60"></label>
+      <label class="chk"><input type="checkbox" id="auto" checked> Lane keeping</label>
       <button class="btn" id="btnReset">Back to lane</button>
       <p class="note"><kbd>W</kbd> <kbd>S</kbd> speed, <kbd>A</kbd> <kbd>D</kbd> steer, <kbd>H</kbd> high beam, <kbd>C</kbd> lux view, <kbd>V</kbd> camera, <kbd>M</kbd> markers, <kbd>Space</kbd> pause.</p>
-    </section>
+    </div>
+  </details>
+
   </div>
+  </div>
+</aside>
+
+<main>
+  <section class="screen">
+    <div class="bar">
+      <div class="seg" id="segMode"><button data-v="0" aria-pressed="true">Night view</button><button data-v="1" aria-pressed="false">Illuminance (lx)</button></div>
+      <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
+      <div class="seg" id="segCockpit"><button data-v="off" aria-pressed="false">No cockpit</button><button data-v="car" aria-pressed="true">Car</button><button data-v="truck" aria-pressed="false">Truck</button></div>
+    </div>
+    <div class="stage" id="stage">
+      <div class="cockpit" id="cockpit" hidden></div>
+      <div class="hud"><div class="speed"><span id="hudSpeed">0</span><small>km/h</small></div></div>
+      <div class="side">
+        <div class="probe" id="probe" aria-live="off"></div>
+        <div class="tell">
+          <button id="btnLow" class="lowb" aria-pressed="true">Low beam</button>
+          <button id="btnHigh" class="highb" aria-pressed="false">High beam</button>
+          <button id="btnPause" class="plain">Pause</button>
+          <button id="btnSave" class="plain" hidden>Save PNG</button>
+          <p class="savemsg" id="saveMsg" role="status" hidden></p>
+        </div>
+      </div>
+      <button class="steer" id="steerL" aria-label="Steer left">&#9664;</button>
+      <button class="steer" id="steerR" aria-label="Steer right">&#9654;</button>
+      <div class="fail" id="fail" hidden></div>
+    </div>
+    <div class="foot">
+      <div class="readout" id="hudMeta">0 m driven</div>
+      <div class="keys">
+        <div class="isokey" id="isoKey" hidden></div>
+        <div class="legend" id="legend" hidden><i></i><div><span>0.1</span><span>1</span><span>10</span><span>100 lx</span></div></div>
+      </div>
+    </div>
+  </section>
+</main>
+</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -1045,7 +1156,7 @@ function lightRGB(src, D) {
         else el.textContent = 'Built-in demo beam';
       });
     });
-    updateProbe();
+    updateProbe(); updateSummaries();
   }
 
   function updateProbe() {
@@ -1178,6 +1289,19 @@ function lightRGB(src, D) {
     updateProbe();
   }
   $('flatRoad').addEventListener('change', applyProfile);
+
+  // closed settings groups show their current values in the header
+  function pressed(id) { var b = Array.prototype.filter.call($(id).children, function (c) { return c.getAttribute('aria-pressed') === 'true'; })[0]; return b ? b.textContent : ''; }
+  function updateSummaries() {
+    var j = function (a) { return a.filter(Boolean).join(' \u00b7 '); };
+    var nFiles = ['lbL', 'lbR', 'hbL', 'hbR'].filter(function (k) { return files[k]; }).length;
+    $('svDisp').textContent = j([$('autoExp').checked && 'Auto exposure', $('shadows').checked && 'Shadows', $('markers').checked && 'Distance markers', $('isoOn').checked && 'Isolux lines']);
+    $('svPhot').textContent = j([SOURCES[src.key].label + ' ' + $('cct').value + ' K', nFiles ? nFiles + ' IES' : 'Built-in demo beam']);
+    $('svVeh').textContent = j([cfg.lampH.toFixed(2) + ' m', cfg.spacing.toFixed(2) + ' m', 'eye ' + cfg.eyeH.toFixed(2) + ' m', cfg.wind < 1 && 'windscreen ' + cfg.wind.toFixed(2)]);
+    $('svRoad').textContent = j([cfg.side, cfg.roadW.toFixed(1) + ' m', $('flatRoad').checked && 'Flat road', pressed('segSurf'), $('raOn').checked && sheet]);
+    $('svDrive').textContent = j([$('speed').value + ' km/h', $('auto').checked && 'Lane keeping']);
+  }
+  ['input', 'change', 'click'].forEach(function (n) { $('rail').addEventListener(n, function () { setTimeout(updateSummaries, 0); }); });
   seg('segAdapt', function (v) { adaptFrom = v; });
   $('raOn').addEventListener('change', applySheet);
   seg('segMode', setMode); seg('segView', setView);
