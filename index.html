@@ -957,8 +957,8 @@ function lightRGB(src, D) {
   function fmtLx(e) { return (e >= 10 ? e.toFixed(0) : e >= 1 ? e.toFixed(1) : e.toFixed(2)) + ' lx'; }
   function exportPng() {
     renderer.render(scene, camera);                    // fresh frame, read back in the same task
-    var src = renderer.domElement, c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
-    var g = c.getContext('2d'); g.drawImage(src, 0, 0);
+    var cv = renderer.domElement, c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height;
+    var g = c.getContext('2d'); g.drawImage(cv, 0, 0);
     var finish = function () {
     var beams = ([cfg.lb ? 'Low beam' : null, cfg.hb ? 'High beam' : null].filter(Boolean).join(' + ') || 'Lamps off') + ' \u00b7 ' + SOURCES[src.key].label + ' ' + Math.round(src.data.cct) + ' K';
     var lines = [
