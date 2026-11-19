@@ -122,11 +122,29 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
 .steer{position:absolute;bottom:10px;width:44px;height:44px;border-radius:50%;background:var(--plot-glass);border:1px solid var(--plot-line);color:var(--plot-ink);font-size:18px;cursor:pointer;touch-action:none;user-select:none}
 #steerL{left:12px}
 #steerR{right:12px}
+.fsbtn{margin-left:auto;padding:6px 12px;white-space:nowrap}
+/* full screen: the browser's own where allowed, otherwise the view card fills the window */
+.screen.full{position:fixed;inset:0;z-index:50;border:0;border-radius:0}
+.screen:fullscreen{border:0;border-radius:0}
+.screen.full .bar,.screen:fullscreen .bar{display:flex;flex-wrap:nowrap;overflow-x:auto;padding:6px 10px;gap:6px}
+.screen.full .bar .seg button,.screen:fullscreen .bar .seg button{padding:4px 8px;font-size:13px;white-space:nowrap}
+.screen.full .fsbtn,.screen:fullscreen .fsbtn{margin-left:auto;padding:4px 10px;font-size:13px}
+/* a phone held upright: turn the view to landscape (real full screen locks the orientation instead, where it can) */
+@media (orientation:portrait) and (pointer:coarse){
+  .screen.full:not(:fullscreen){inset:auto;top:0;left:100%;width:100vh;width:100dvh;height:100vw;transform-origin:top left;transform:rotate(90deg)}
+}
 .cockpit{position:absolute;inset:0;pointer-events:none}
 .cockpit svg{display:block;width:100%;height:100%}
 .fail{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--plot-bad)}
 
-@media (max-width:900px){
+@media (max-width:900px) and (orientation:landscape){
+  /* a phone on its side: settings beside the view */
+  .bench{grid-template-columns:300px minmax(0,1fr);gap:10px}
+  body{padding-block:6px}
+  .bar{padding:6px 10px;gap:6px}
+  .bar .seg button{padding:4px 8px;font-size:13px}
+}
+@media (max-width:900px) and (orientation:portrait){
   /* the view stays on screen while the settings scroll beneath it */
   body{padding-block:8px}
   .bench{grid-template-columns:minmax(0,1fr);grid-template-rows:48% minmax(0,1fr);gap:10px}
@@ -135,9 +153,10 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
   .bar .seg button{padding:5px 8px;font-size:13px}
   .foot{padding:6px 10px;min-height:0}
 }
-@media (max-width:640px){
+@media (max-width:640px) and (orientation:portrait){
   .bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-  .bar .seg:last-child{grid-column:1 / -1}
+  .bar .seg:nth-child(3){grid-column:1 / -1}
+  .fsbtn{grid-column:1 / -1;margin-left:0}
   .bar .seg button{padding:5px 4px;white-space:normal;line-height:1.15}
   input[type=number],input[type=text]{font-size:16px}   /* 16 px keeps phone browsers from zooming into a focused field */
   .speed{font-size:28px}
@@ -260,7 +279,7 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
         <input type="range" id="speed" min="0" max="130" step="5" value="60"></label>
       <label class="chk"><input type="checkbox" id="auto" checked> Lane keeping</label>
       <button class="btn" id="btnReset">Back to lane</button>
-      <p class="note"><kbd>W</kbd> <kbd>S</kbd> speed, <kbd>A</kbd> <kbd>D</kbd> steer, <kbd>H</kbd> high beam, <kbd>C</kbd> lux view, <kbd>V</kbd> camera, <kbd>M</kbd> markers, <kbd>Space</kbd> pause.</p>
+      <p class="note"><kbd>W</kbd> <kbd>S</kbd> speed, <kbd>A</kbd> <kbd>D</kbd> steer, <kbd>H</kbd> high beam, <kbd>C</kbd> lux view, <kbd>V</kbd> camera, <kbd>M</kbd> markers, <kbd>F</kbd> full screen, <kbd>Space</kbd> pause.</p>
     </div>
   </details>
 
@@ -269,11 +288,12 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
 </aside>
 
 <main>
-  <section class="screen">
+  <section class="screen" id="viewCard">
     <div class="bar">
       <div class="seg" id="segMode"><button data-v="0" aria-pressed="true">Night view</button><button data-v="1" aria-pressed="false">Illuminance (lx)</button></div>
       <div class="seg" id="segView"><button data-v="driver" aria-pressed="true">Driver eye</button><button data-v="bird" aria-pressed="false">Bird's eye</button></div>
       <div class="seg" id="segCockpit"><button data-v="off" aria-pressed="false">No cockpit</button><button data-v="car" aria-pressed="true">Car</button><button data-v="truck" aria-pressed="false">Truck</button></div>
+      <button class="btn fsbtn" id="btnFull" aria-pressed="false">Full screen</button>
     </div>
     <div class="stage" id="stage">
       <div class="cockpit" id="cockpit" hidden></div>
@@ -1392,6 +1412,40 @@ function lightRGB(src, D) {
     } else finish();
   }
   $('btnSave').addEventListener('click', exportPng);
+
+  // full screen: the browser's own full screen of the view card, with a landscape lock where the device allows it;
+  // where the browser refuses (iPhone, embedded views) the card fills the window and CSS turns it on an upright phone
+  var card = $('viewCard'), full = false, realFull = false;
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+  function setFull(on) {
+    full = on; if (on) card.classList.add('full'); else card.classList.remove('full');
+    $('btnFull').textContent = on ? 'Exit full screen' : 'Full screen'; $('btnFull').setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  function enterFull() {
+    setFull(true);
+    var req = card.requestFullscreen || card.webkitRequestFullscreen;
+    if (!req) return;
+    try {
+      var pr = req.call(card);
+      var lock = function () {
+        realFull = true;
+        var so = window.screen && window.screen.orientation;
+        if (so && so.lock) so.lock('landscape').catch(function () {});
+      };
+      if (pr && pr.then) pr.then(lock, function () {}); else if (fsElement()) lock();
+    } catch (e) {}
+  }
+  function exitFull() {
+    if (fsElement()) {
+      try { var so = window.screen && window.screen.orientation; if (so && so.unlock) so.unlock(); } catch (e) {}
+      var ex = document.exitFullscreen || document.webkitExitFullscreen; if (ex) try { var r = ex.call(document); if (r && r.catch) r.catch(function () {}); } catch (e) {}
+    }
+    realFull = false; setFull(false);
+  }
+  $('btnFull').addEventListener('click', function () { if (full) exitFull(); else enterFull(); });
+  ['fullscreenchange', 'webkitfullscreenchange'].forEach(function (n) {
+    document.addEventListener(n, function () { if (!fsElement() && realFull) { realFull = false; setFull(false); } });
+  });
   $('btnPause').addEventListener('click', function () { setPaused(!paused); });
   $('btnReset').addEventListener('click', resetCar);
 
@@ -1412,6 +1466,8 @@ function lightRGB(src, D) {
     else if (k === 'c') setMode(shared.uMode.value > 0.5 ? 0 : 1);
     else if (k === 'v') setView(view === 'driver' ? 'bird' : 'driver');
     else if (k === 'm') $('markers').checked = !$('markers').checked;
+    else if (k === 'f') { if (full) exitFull(); else enterFull(); }
+    else if (k === 'escape' && full && !fsElement()) exitFull();
     else if (k === ' ') { setPaused(!paused); e.preventDefault(); }
   });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
