@@ -40,7 +40,8 @@ with WebGL 2 (it loads Three.js r128 and two web fonts from public CDNs, so it n
 |---|---|
 | RHT / LHT, road width | RHT, 7.0 m |
 | Flat road | Off: the track has crests and sags |
-| Dry / Wet, road surface R_L, marking R_L | Dry, 15 and 150 mcd/m²/lx |
+| Dry / Wet, road surface R_L, marking R_L | Dry, 13 and 150 mcd/m²/lx (wet: 3 and 35) |
+| Road brightness by eye height | On |
 | Sign brightness by observation angle, sheeting class | On, RA2 |
 
 ### Driving
@@ -64,7 +65,10 @@ the fallback.
 period, net elevation zero. The vehicle pitches with the grade; lamps, eye and beam lookup follow it. While the
 profile is on, "Road illuminance ahead" and the road estimate are flat-road values and are labelled so.
 
-**Road surface.** Road and markings use R_L (L = R_L · E⊥) plus a diffuse term. Wet mode lowers R_L and adds mirror
+**Road surface.** Road and markings use R_L (L = R_L · E⊥) plus a diffuse term. R_L is defined at the EN 1436 30 m car
+geometry; with "Road brightness by eye height" on it is scaled per lamp and per point by G / 0.54, where
+G = tan(lamp elevation) / tan(eye elevation) seen from the road point (Sørensen 2011, Annex B). A higher eye, as in a
+truck, sees a darker road surface. Wet mode lowers R_L and adds mirror
 reflections of the roadside objects: a camera mirrored in the road plane renders their luminance, and the road shader
 projects into that image with water's Fresnel reflectance and a vertical spread. Reflections need float render
 targets; without them the wet road only darkens.
@@ -80,7 +84,8 @@ view only.
 | R_A table RA3 | Sign sheeting | **Placeholder**, not standard data |
 | R_A beyond β 40° falls with cos β / cos 40° | Sign sheeting | **Assumption**, the standard gives no values |
 | Marking R_L 150 dry, 35 wet | Road markings | EN 1436 classes R3 and RW2 (minimum values) |
-| Road surface R_L 15 dry, 5 wet | Asphalt | **Placeholder** |
+| Road surface R_L 13 dry, 3 wet | Asphalt | Measured means of bare pavement, EN 1436 geometry (*Road marking visibility for automated vehicles*, Case Studies in Construction Materials, 2025, Table 7). Typical asphalt and concrete: dry 6–35, wet 3–8 (BASt report V 235, Drewes et al., 2014) |
+| R_L scaling with viewing geometry, G = 0.54 at 30 m | Road and markings | K. Sørensen, *Performance of road markings and road surfaces* (2011), Annex B |
 | Verge R_L 4 | Grass verge | **Placeholder** |
 | Wet mirror share 0.5 | Wet reflections | **Placeholder** |
 | Water reflectance, F0 = 0.02 (n = 1.33) | Wet reflections | Fresnel equations, Schlick approximation |

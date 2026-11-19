@@ -241,9 +241,10 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
       <label class="chk"><input type="checkbox" id="flatRoad"> Flat road (no crests or dips)</label>
       <div class="seg" id="segSurf"><button data-v="dry" aria-pressed="true">Dry</button><button data-v="wet" aria-pressed="false">Wet</button></div>
       <div class="row2">
-        <label class="f"><span>Road surface R<sub>L</sub> <small>(mcd/m&sup2;/lx)</small></span><input type="number" id="rlRoad" value="15" step="1" min="1" max="100"></label>
+        <label class="f"><span>Road surface R<sub>L</sub> <small>(mcd/m&sup2;/lx)</small></span><input type="number" id="rlRoad" value="13" step="1" min="1" max="100"></label>
         <label class="f"><span>Marking R<sub>L</sub> <small>(mcd/m&sup2;/lx)</small></span><input type="number" id="rlMark" value="150" step="5" min="10" max="600"></label>
       </div>
+      <label class="chk"><input type="checkbox" id="rlGeo" checked> Road brightness by eye height (R<sub>L</sub> scaled from the 30 m car geometry)</label>
       <p class="note" id="surfNote"></p>
       <label class="chk"><input type="checkbox" id="raOn" checked> Sign brightness by observation angle</label>
       <div class="seg" id="segSheet"><button data-v="RA1" aria-pressed="false">RA1</button><button data-v="RA2" aria-pressed="true">RA2</button><button data-v="RA3" aria-pressed="false">RA3</button></div>
@@ -446,15 +447,26 @@ function roadIlluminance(dist, lat, cfg, grids) {
 }
 
 // ---------- Road surface ----------
-// Retroreflected luminance coefficient R_L (mcd per m2 per lx), the EN 1436 quantity: L = R_L E_perp near the driver's
-// viewing geometry. Markings: EN 1436 performance classes, dry R3 (R_L >= 150) and wet RW2 (R_W >= 35).
-// Road surface and verge: PLACEHOLDERS. No standard gives R_L for asphalt; 15 dry is the value used before this switch
-// existed (published measurements of dry asphalt are commonly in the 10 to 20 range) and 5 wet only reflects that a
-// water film removes most of the surface's retroreflection. Replace both with measured values when you have them.
+// Retroreflected luminance coefficient R_L (mcd per m2 per lx), the EN 1436 quantity: L = R_L E_perp, defined at the
+// 30 m car geometry (illumination angle 1.24 deg, observation angle 2.29 deg).
+// Markings: EN 1436 performance classes, dry R3 (R_L >= 150) and wet RW2 (R_W >= 35).
+// Road surface: measured means of bare pavement next to road markings, EN 1436 handheld retroreflectometer, dry 13 and
+// wet 3 (Road marking visibility for automated vehicles, Case Studies in Construction Materials, 2025, Table 7). Typical
+// asphalt and concrete ranges there, after BASt report V 235 (Drewes et al., 2014): dry 6-35, wet 3-8. Sorensen (2011,
+// Performance of road markings and road surfaces): road surfaces mostly 10-30 dry, lower on worn texture.
+// Verge (grass) 4: PLACEHOLDER, no source.
 var SURF = {
-  dry: { road: 15, mark: 150, note: 'Dry: marking R_L 150 = EN 1436 class R3. Road 15 is a placeholder, not a standard value.' },
-  wet: { road: 5, mark: 35, note: 'Wet: marking R_L 35 = EN 1436 class RW2. Road 5 and the mirror strength are placeholders.' }
+  dry: { road: 13, mark: 150, note: 'Dry: marking R_L 150 = EN 1436 class R3. Road 13 = measured mean of bare pavement (EN 1436 geometry); typical range 6 to 35.' },
+  wet: { road: 3, mark: 35, note: 'Wet: marking R_L 35 = EN 1436 class RW2. Road 3 = measured mean of wet pavement; typical range 3 to 8. Mirror strength is a placeholder.' }
 };
+// R_L for other viewing geometries (Sorensen 2011, Annex B): R_L is proportional to G = tan(lamp elevation) / tan(eye
+// elevation) seen from the road point, which is 0.54 at the EN 1436 30 m car geometry (lamp 0.65 m, eye 1.2 m). A higher
+// eye, as in a truck, gives a smaller G and a darker road. G is held at 1 or below.
+var RL_G0 = Math.tan(1.24 * D2R) / Math.tan(2.29 * D2R);
+function rlGeomFactor(sinLamp, sinEye) {
+  var tl = sinLamp / Math.sqrt(Math.max(1 - sinLamp * sinLamp, 1e-9)), te = sinEye / Math.sqrt(Math.max(1 - sinEye * sinEye, 1e-9));
+  return te > 0 ? Math.min(Math.max(tl / te, 0), 1) / RL_G0 : 0;
+}
 // Wet-road mirror reflection: Fresnel reflectance of water (n = 1.33, Schlick: F0 = 0.02) at the viewing angle, times
 // WET_MIRROR, the share of the surface acting as a mirror (PLACEHOLDER 0.5: depends on water film depth and texture).
 var WET_MIRROR = 0.5, WET_SPREAD = 0.03;
@@ -549,7 +561,8 @@ function adaptationLuminance(cfg, grids, roadW, carLat) {
         var x = px - lamps[k][0], d2 = x * x + cfg.lampH * cfg.lampH + pz * pz, d = Math.sqrt(d2);
         var Hl = Math.atan2(x, pz) / D2R, Vl = Math.asin(-cfg.lampH / d) / D2R - cfg.aimV;
         var I = (cfg.lb ? sampleGrid(lamps[k][1], Hl, Vl) : 0) + (cfg.hb ? sampleGrid(lamps[k][2], Hl, Vl) : 0);
-        L += I / d2 * (alb / Math.PI * cfg.lampH / d + retro);
+        var gf = cfg.rlGeo ? rlGeomFactor(cfg.lampH / d, cfg.eyeH / Math.sqrt(t * t * cv * cv + cfg.eyeH * cfg.eyeH)) : 1;
+        L += I / d2 * (alb / Math.PI * cfg.lampH / d + retro * gf);
       }
       sum += Math.log(L); n++;
     }
@@ -739,7 +752,7 @@ function lightRGB(src, D) {
     'uniform float uExposure; uniform float uMode; uniform float uRoadW; uniform float uKind; uniform float uRetro; uniform float uHasMap;',
     'uniform vec3 uAlbedo; uniform vec3 uLight; uniform float uMeso;',
     'uniform vec3 uEye; uniform float uRAOn; uniform float uRA[9]; uniform float uLumOut;',
-    'uniform float uRLRoad; uniform float uRLMark; uniform float uWind;',
+    'uniform float uRLRoad; uniform float uRLMark; uniform float uWind; uniform float uRLGeo;',
     'uniform sampler2D uReflMap; uniform mat4 uReflMat; uniform float uReflOn; uniform float uReflK; uniform float uReflSpread;',
     'uniform float uIso[8]; uniform float uIsoN;',
     'uniform sampler2D uShadowMap; uniform mat4 uShadowMat; uniform float uShadowOn; uniform vec2 uShadowNF; uniform vec2 uShadowPx;',
@@ -770,7 +783,8 @@ function lightRGB(src, D) {
     // Per lamp: ePerp = illuminance on a plane facing the lamp (E_perp = I/d^2), eSurf = on the surface (E_perp cos(beta)),
     // eRA = sum of R_A(alpha, beta) E_perp, where alpha is the observation angle (lamp and eye seen from the point) and
     // beta the entrance angle (surface normal to lamp). Angles use atan(|a x b|, a.b), which stays exact at 0.2 deg.
-    'void lamp(vec3 pos, sampler2D lb, sampler2D hb, vec3 N, bool doRA, inout float ePerp, inout float eSurf, inout float eRA){',
+    // eRL (ground only, when R_L follows the viewing geometry): sum of E_perp times rlGeomFactor() of the core.
+    'void lamp(vec3 pos, sampler2D lb, sampler2D hb, vec3 N, bool doRA, bool doRL, inout float ePerp, inout float eSurf, inout float eRA, inout float eRL){',
     '  vec3 L = vWP - pos; float d2 = max(dot(L,L), 0.25); vec3 dir = L / sqrt(d2);',
     '  float cosi = dot(N, -dir); if (cosi <= 0.0) return;',
     '  vec3 dv = uW2V * dir;',
@@ -781,6 +795,11 @@ function lightRGB(src, D) {
     '    float a = degrees(atan(length(cross(toL, toE)), dot(toL, toE)));',
     '    float b = degrees(atan(length(cross(N, -dir)), cosi));',
     '    eRA += e * raLookup(a, b);',
+    '  }',
+    '  if (doRL) {',
+    '    float sl = clamp(cosi, 0.0, 0.9999); float se = clamp(dot(N, normalize(uEye - vWP)), 0.0, 0.9999);',
+    '    float tl = sl / sqrt(1.0 - sl*sl); float te = se / sqrt(1.0 - se*se);',
+    '    eRL += te > 0.0 ? e * min(tl / te, 1.0) / 0.541280866 : 0.0;',
     '  }',
     '}',
     'float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }',
@@ -804,10 +823,11 @@ function lightRGB(src, D) {
     '  bool isGround = uKind < 0.5 || uKind > 1.5;',
     '  vec3 N = normalize(vWN); if (!isGround && !gl_FrontFacing) N = -N;',
     '  bool sheet = !isGround && uRetro > 0.0 && uRAOn > 0.5;',   // retroreflective sheeting: signs and delineator patches
-    '  float ep = 0.0; float es = 0.0; float era = 0.0;',
-    '  lamp(uLampL, uLBL, uHBL, N, sheet, ep, es, era); lamp(uLampR, uLBR, uHBR, N, sheet, ep, es, era);',
+    '  bool rlg = isGround && uRLGeo > 0.5;',
+    '  float ep = 0.0; float es = 0.0; float era = 0.0; float erl = 0.0;',
+    '  lamp(uLampL, uLBL, uHBL, N, sheet, rlg, ep, es, era, erl); lamp(uLampR, uLBR, uHBR, N, sheet, rlg, ep, es, era, erl);',
     '  float esRaw = es;',                               // illuminance before shadows, for the isolux lines
-    '  float sh = shade(); ep *= sh; es *= sh; era *= sh;',
+    '  float sh = shade(); ep *= sh; es *= sh; era *= sh; erl *= sh;',
     '  vec3 alb = uAlbedo; float retro = uRetro; vec3 rc = vec3(1.0); float mark = 0.0;',
     '  if (isGround) {',
     '    float x = vTrack.x; float s = vTrack.y; float ax = abs(x); float hw = uRoadW*0.5;',   // metres across and along the road
@@ -832,7 +852,7 @@ function lightRGB(src, D) {
     // (normal to eye). R_A is defined per unit sign area and the eye sees that area foreshortened by cos(v); v is held
     // to at most 84 deg. Sheeting colour scales R_A by the texture colour's relative luminance (about 0.1 for blue and
     // 0.15 for red, near the EN 12899-1 colour ratios for RA2). With the effect off the old constant is used: retro * E_perp.
-    '  vec3 retroL = sheet ? rc * era / max(dot(N, normalize(uEye - vWP)), 0.1) : rc * retro * ep;',
+    '  vec3 retroL = sheet ? rc * era / max(dot(N, normalize(uEye - vWP)), 0.1) : rc * retro * (rlg ? erl : ep);',
     '  vec3 lum = (alb*(es/PI) + retroL) * uLight + alb*0.004;',   // cd/m2; last term is faint night-sky ambient
     // Wet road: the scene mirrored in the water film. uReflMap holds the luminance of the roadside objects seen by a
     // camera mirrored in the road plane under the eye; projecting this road point with that camera finds its reflection.
@@ -886,7 +906,7 @@ function lightRGB(src, D) {
     uIso: { value: [1, 1, 1, 1, 1, 1, 1, 1] }, uIsoN: { value: 0 },
     uLight: { value: new THREE.Vector3(1, 1, 1) }, uMeso: { value: 1 },
     uEye: { value: new THREE.Vector3() }, uRAOn: { value: 1 }, uLumOut: { value: 0 },
-    uRLRoad: { value: 0.015 }, uRLMark: { value: 0.15 }, uWind: { value: 1 },
+    uRLRoad: { value: SURF.dry.road / 1000 }, uRLMark: { value: SURF.dry.mark / 1000 }, uWind: { value: 1 }, uRLGeo: { value: 1 },
     uReflMap: { value: null }, uReflMat: { value: new THREE.Matrix4() }, uReflOn: { value: 0 }, uReflK: { value: WET_MIRROR }, uReflSpread: { value: WET_SPREAD }, uRA: { value: RA_TABLES.RA2.v.slice() },
     uShadowMap: { value: null }, uShadowMat: { value: new THREE.Matrix4() }, uShadowOn: { value: 0 },
     uShadowNF: { value: new THREE.Vector2(0.8, 500) }, uShadowPx: { value: new THREE.Vector2(1 / 2048, 1 / 1024) }
@@ -1277,9 +1297,11 @@ function lightRGB(src, D) {
     if (load) { $('rlRoad').value = c.road; $('rlMark').value = c.mark; }
     c.road = num('rlRoad', 1, 100, SURF[surf].road); c.mark = num('rlMark', 10, 600, SURF[surf].mark);
     shared.uRLRoad.value = c.road / 1000; shared.uRLMark.value = c.mark / 1000; cfg.rlRoad = c.road / 1000;
+    shared.uRLGeo.value = cfg.rlGeo = $('rlGeo').checked ? 1 : 0;
     $('surfNote').textContent = SURF[surf].note + (surf === 'wet' && !reflRT ? ' Reflections need float render targets, which this device lacks.' : '');
   }
   seg('segSurf', function (v) { surf = v; applySurface(true); });
+  $('rlGeo').addEventListener('change', function () { shared.uRLGeo.value = cfg.rlGeo = $('rlGeo').checked ? 1 : 0; });
   ['rlRoad', 'rlMark'].forEach(function (id) { $(id).addEventListener('change', function () { applySurface(false); }); });
   function applyProfile() {
     PROFILE.on = !$('flatRoad').checked; ribBase = null;
