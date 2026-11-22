@@ -44,11 +44,30 @@ with WebGL 2 (it loads Three.js r128 and two web fonts from public CDNs, so it n
 | Road brightness by eye height | On |
 | Sign brightness by observation angle, sheeting class | On, RA2 |
 
+### ADB scenario (from adbSim)
+| Control | What it does |
+|---|---|
+| Load adbSim road scenario | The file adbSim exports under Project and export, Road-illuminate scenario (format `adbsim-road-scenario`) |
+| Play, scenario time | Run the scenario in real time (or slower), or step to any time |
+| Traffic: oncoming cars and trucks | Show the scenario's vehicles; without a scenario, oncoming traffic on the track |
+
+The file embeds the low beam and the ADB segments (one IES file per segment, or one high beam with segment boundaries)
+and, per time frame, each lamp's segment weights and the target vehicles. Each lamp's high beam is rebuilt per frame as
+the sum of w_i × segment_i, so you see the dark tunnel move as the controller in adbSim switched it. While a scenario is
+loaded the road is straight and flat, as adbSim assumes; lamp height, spacing, vertical aim, traffic side and lane width
+come from the file, and the car drives at the scenario's ego speed. The overlay lists the segments that are off and the
+illuminance at each target's glare point with adbSim's limit result. Unload the scenario to return to the track and your
+own files.
+
 ### Driving
 Set speed, lane keeping, steering with A/D or the on-screen arrows. Keys: W/S speed, H high beam, C lux view,
 V camera, M markers, Space pause. When paused, Save PNG exports the view with a caption of the settings.
 
 ## Models
+
+**Traffic.** Cars (4.5 × 1.8 m) and trucks (16.5 × 2.55 m) with headlamps and tail lamps at the heights and spacing of
+adbSim's target types. Bodies are lit by your beams like any other object; their lamps are drawn self-luminous with a
+soft glow and are not part of the photometric calculation.
 
 **Retroreflection of signs.** For each lamp, at each sign pixel, the observation angle (lamp and driver eye seen from
 the sign) and entrance angle give R_A from the selected sheeting table. Luminance is

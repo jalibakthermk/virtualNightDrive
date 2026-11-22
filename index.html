@@ -108,6 +108,12 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
 .speed small{font:600 14px var(--f-body);color:var(--plot-dim);margin-left:4px}
 .side{position:absolute;top:10px;right:12px;display:flex;flex-direction:column;gap:6px;width:max-content;max-width:48%}
 .probe:empty{display:none}
+.adbhud{position:absolute;top:64px;left:12px;max-width:min(48%,460px);background:var(--plot-glass);border:1px solid var(--plot-line);border-radius:7px;padding:7px 10px;font-size:12.5px;line-height:1.45;pointer-events:none;color:var(--plot-ink)}
+.adbhud b{font-weight:600}
+.adbhud .off{color:var(--plot-dim)}
+.adbhud .rf{color:#ff7a6e;font-weight:600}.adbhud .rp{color:#7fd67a;font-weight:600}.adbhud .rn{color:var(--plot-dim)}
+.adbctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.adbctl select{width:auto}
 .probe{background:var(--plot-glass);border:1px solid var(--plot-line);border-radius:7px;padding:7px 10px;font-size:13px;pointer-events:none}
 .probe b{display:block;font:600 13px var(--f-display);letter-spacing:.04em;color:var(--plot-accent);margin-bottom:2px}
 .probe div{display:flex;justify-content:space-between;gap:14px}
@@ -192,6 +198,19 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
   </header>
   <div class="rail-body">
   <div class="secs">
+
+  <details class="sec" id="secAdb">
+    <summary><span class="st">ADB scenario</span><span class="sv" id="svAdb">none</span></summary>
+    <div class="sb">
+      <div class="slot"><div><b>adbSim road scenario</b><span id="adb_s">Export it in adbSim: Project and export, Road-illuminate scenario</span></div><label class="btn" for="adb_f">Load</label><button class="btn" id="adbOff" aria-label="Unload the ADB scenario">&times;</button><input type="file" id="adb_f" accept=".json,application/json" hidden></div>
+      <div class="adbctl"><button class="btn" id="adbPlay" disabled>Play</button>
+        <select id="adbRate" aria-label="Playback speed"><option value="0.25">&times;0.25</option><option value="0.5">&times;0.5</option><option value="1" selected>&times;1 (real time)</option></select></div>
+      <label class="f"><span class="qhead"><span>Scenario time</span><span class="sval" id="adbTime">&ndash;</span></span>
+        <input type="range" id="adbT" min="0" max="1" step="0.01" value="0" disabled></label>
+      <label class="chk"><input type="checkbox" id="trafficOn" checked> Traffic: oncoming cars and trucks</label>
+      <p class="note" id="adbNote">While a scenario is loaded the road is straight and flat, as in adbSim, and the car follows the scenario. The high beam is the sum of the ADB segments of each frame. Without a scenario, the traffic option sends oncoming cars and trucks along the track.</p>
+    </div>
+  </details>
 
   <details class="sec" open>
     <summary><span class="st">Display</span><span class="sv" id="svDisp"></span></summary>
@@ -298,6 +317,7 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
     <div class="stage" id="stage">
       <div class="cockpit" id="cockpit" hidden></div>
       <div class="hud"><div class="speed"><span id="hudSpeed">0</span><small>km/h</small></div></div>
+      <div class="adbhud" id="adbHud" hidden aria-live="off"></div>
       <div class="side">
         <div class="probe" id="probe" aria-live="off"></div>
         <div class="tell">
@@ -464,6 +484,36 @@ function roadIlluminance(dist, lat, cfg, grids) {
     E += I / d2 * (cfg.lampH / d);
   });
   return E;
+}
+
+// ---------- ADB scenario from adbSim (format "adbsim-road-scenario") ----------
+// Each lamp's high beam is low beam + sum of w_i x segment_i; segments are kept cropped to the cells where they give light.
+function cropGrid(g) {
+  var N = GRID.NH, i0 = N, i1 = -1, j0 = GRID.NV, j1 = -1;
+  for (var j = 0; j < GRID.NV; j++) for (var i = 0; i < N; i++) if (g[j * N + i] > 0) { if (i < i0) i0 = i; if (i > i1) i1 = i; if (j < j0) j0 = j; if (j > j1) j1 = j; }
+  if (i1 < 0) return { i0: 0, j0: 0, ni: 0, nj: 0, d: new Float32Array(0) };
+  var ni = i1 - i0 + 1, nj = j1 - j0 + 1, d = new Float32Array(ni * nj);
+  for (j = 0; j < nj; j++) d.set(g.subarray((j0 + j) * N + i0, (j0 + j) * N + i0 + ni), j * ni);
+  return { i0: i0, j0: j0, ni: ni, nj: nj, d: d };
+}
+// synthetic segmentation as in adbSim: segment i = high beam between edges i and i+1 with a smoothstep edge (masks sum to 1)
+function adbEdge(h, b, soft) { if (soft <= 0) return h >= b ? 1 : 0; var t = (h - b + soft / 2) / soft; return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t); }
+function adbMaskedGrid(hb, i, edges, soft) {
+  var g = new Float32Array(hb.length), dH = (GRID.H1 - GRID.H0) / (GRID.NH - 1);
+  for (var c = 0; c < GRID.NH; c++) {
+    var H = GRID.H0 + c * dH, m = adbEdge(H, edges[i], soft) - adbEdge(H, edges[i + 1], soft); if (!m) continue;
+    for (var r = 0; r < GRID.NV; r++) g[r * GRID.NH + c] = hb[r * GRID.NH + c] * m;
+  }
+  return g;
+}
+// out = sum of w[i] x segs[i] on the common grid
+function adbSum(out, segs, w) {
+  out.fill(0);
+  for (var k = 0; k < segs.length; k++) {
+    var x = Math.max(0, Math.min(1, +w[k] || 0)), sg = segs[k]; if (!x || !sg.ni) continue;
+    for (var j = 0; j < sg.nj; j++) { var o = (sg.j0 + j) * GRID.NH + sg.i0, q = j * sg.ni; for (var i = 0; i < sg.ni; i++) out[o + i] += x * sg.d[q + i]; }
+  }
+  return out;
 }
 
 // ---------- Road surface ----------
@@ -642,9 +692,11 @@ var TRACK = (function () {
   return { P: P, x: x, z: z, th: th, y: y, g: g };
 })();
 var PROFILE = { on: true };          // false: flat road, exactly as before the vertical profile existed
+var STRAIGHT = { on: false };        // true: a straight, flat road along -Z (used while an adbSim ADB scenario is loaded)
 // Centreline position, heading, elevation and grade at arc length s (heading 0 = along -Z, positive = turning right;
 // s is measured in plan).
 function trackAt(s) {
+  if (STRAIGHT.on) return { x: 0, z: -s, th: 0, y: 0, g: 0 };
   var P = TRACK.P, n = Math.floor(s / P), r = s - n * P, i = Math.min(Math.floor(r), P - 1), f = r - i;
   return {
     x: TRACK.x[i] + (TRACK.x[i + 1] - TRACK.x[i]) * f + n * TRACK.x[P],
@@ -1180,7 +1232,8 @@ function lightRGB(src, D) {
     texCache.forEach(function (t) { t.dispose(); }); texCache = [];
     ['lb', 'hb'].forEach(function (fn) {
       var L = files[fn + 'L'], R = files[fn + 'R'], gL, gR;
-      if (!L && !R) { gL = gR = fn === 'lb' ? demoLow(cfg.side) : demoHigh(); }
+      if (ADB.on) { gL = ADB[fn].L; gR = ADB[fn].R; }       // ADB scenario: low beam and the segment sum of the frame
+      else if (!L && !R) { gL = gR = fn === 'lb' ? demoLow(cfg.side) : demoHigh(); }
       else {
         gL = gridFromIES((L || R).ies, cfg.flip);
         gR = (L && R) ? gridFromIES(R.ies, cfg.flip) : gL;
@@ -1188,10 +1241,12 @@ function lightRGB(src, D) {
       grids[fn + 'L'] = gL; grids[fn + 'R'] = gR;
       var tL = makeTex(gL), tR = gR === gL ? tL : makeTex(gR);
       shared['u' + fn.toUpperCase() + 'L'].value = tL; shared['u' + fn.toUpperCase() + 'R'].value = tR;
+      if (fn === 'hb') { ADB.tex.L = tL; ADB.tex.R = tR; }
       ['L', 'R'].forEach(function (sd) {
         var el = $(fn + sd + '_s'), f = files[fn + sd], other = files[fn + (sd === 'L' ? 'R' : 'L')];
         if (el.classList.contains('err')) return;
-        if (f) el.textContent = f.name + ' · ' + typeName(f.ies.type) + ' · ' + f.ies.nH + '×' + f.ies.nV + ' · peak ' + Math.round(f.ies.peak).toLocaleString() + ' cd';
+        if (ADB.on) el.textContent = fn === 'lb' ? 'From the ADB scenario' : 'ADB: sum of the segments of the current frame';
+        else if (f) el.textContent = f.name + ' · ' + typeName(f.ies.type) + ' · ' + f.ies.nH + '×' + f.ies.nV + ' · peak ' + Math.round(f.ies.peak).toLocaleString() + ' cd';
         else if (other) el.textContent = 'Using the ' + (sd === 'L' ? 'right' : 'left') + ' lamp file';
         else el.textContent = 'Built-in demo beam';
       });
@@ -1222,6 +1277,206 @@ function lightRGB(src, D) {
       }
     }
   }
+
+  // ---------- Vehicles: oncoming and preceding cars and trucks with working lamps ----------
+  // Local frame: front face at z = 0, body towards +z, forward is -z (as the road heading), y up. Bodies use the
+  // lit material, so they show in your beam; lamps are self-luminous with a soft glow.
+  var glowTex = (function () {
+    var c = document.createElement('canvas'); c.width = c.height = 64; var g = c.getContext('2d');
+    var r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.18, 'rgba(255,255,255,0.75)'); r.addColorStop(0.5, 'rgba(255,255,255,0.12)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = r; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
+  })();
+  var VEH = {   // dimensions match adbSim data/targets.json (lamp heights and spacing)
+    car: { L: 4.5, W: 1.8, body: [[0, 0.25, 4.5, 0.75, 1.8], [1.1, 1.0, 2.6, 0.45, 1.6]], head: [0.7, 0.65], tail: [0.65, 0.9], albedo: [0.16, 0.17, 0.19] },
+    truck: { L: 16.5, W: 2.55, body: [[0, 0.5, 2.3, 2.6, 2.5], [2.6, 1.0, 13.9, 3.0, 2.55]], head: [1.0, 1.0], tail: [0.9, 1.0], albedo: [0.5, 0.5, 0.52] }
+  };
+  var vehMats = { car: mat({ albedo: VEH.car.albedo }), truck: mat({ albedo: VEH.truck.albedo }), cab: mat({ albedo: [0.32, 0.08, 0.07] }), glass: mat({ albedo: [0.03, 0.035, 0.04] }) };
+  var lampMat = { head: new THREE.MeshBasicMaterial({ color: 0xfff4e0 }), tail: new THREE.MeshBasicMaterial({ color: 0xff2a1a }) };
+  var glowMat = {
+    head: new THREE.SpriteMaterial({ map: glowTex, color: 0xfff1d6, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }),
+    tail: new THREE.SpriteMaterial({ map: glowTex, color: 0xff3020, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })
+  };
+  var lampGeo = new THREE.PlaneGeometry(0.24, 0.11);
+  function makeVehicle(kind) {
+    var V = VEH[kind], grp = new THREE.Group();
+    V.body.forEach(function (b, n) {   // [z start, bottom y, length, height, width]
+      var m = new THREE.Mesh(new THREE.BoxGeometry(b[4], b[3], b[2]), kind === 'truck' && n === 0 ? vehMats.cab : n === 1 && kind === 'car' ? vehMats.glass : vehMats[kind]);
+      m.position.set(0, b[1] + b[3] / 2, b[0] + b[2] / 2); grp.add(m);
+    });
+    [-1, 1].forEach(function (sd) {
+      var h = new THREE.Mesh(lampGeo, lampMat.head); h.position.set(sd * V.head[0], V.head[1], -0.02); h.rotation.y = Math.PI; grp.add(h);
+      var hg = new THREE.Sprite(glowMat.head); hg.scale.set(1.1, 1.1, 1); hg.position.set(sd * V.head[0], V.head[1], -0.2); grp.add(hg);
+      var t = new THREE.Mesh(lampGeo, lampMat.tail); t.position.set(sd * V.tail[0], V.tail[1], V.L + 0.02); grp.add(t);
+      var tg = new THREE.Sprite(glowMat.tail); tg.scale.set(0.55, 0.55, 1); tg.position.set(sd * V.tail[0], V.tail[1], V.L + 0.15); grp.add(tg);
+    });
+    grp.userData.kind = kind; grp.visible = false; scene.add(grp);
+    return grp;
+  }
+  // put a vehicle on the road: its front at arc length sFront, centre `lat` m right of the centreline
+  function placeVehicle(v, sFront, lat, oncoming) {
+    var t = trackAt(sFront);
+    v.position.set(t.x + Math.cos(t.th) * lat, t.y, t.z + Math.sin(t.th) * lat);
+    v.rotation.set(0, -t.th + (oncoming ? Math.PI : 0), 0); v.visible = true;
+  }
+
+  // free-drive traffic: a few oncoming cars and trucks in the opposite lane, recycled ahead of the car
+  var traffic = ['car', 'truck', 'car', 'car', 'truck', 'car'].map(function (k, i) { return { veh: makeVehicle(k), s: 120 + i * 170, v: (k === 'truck' ? 80 : 95) / 3.6 }; });
+  function updateTraffic(dt) {
+    var on = $('trafficOn').checked && !ADB.on;
+    traffic.forEach(function (tr) {
+      if (!on) { tr.veh.visible = false; return; }
+      if (!paused) tr.s -= tr.v * dt;
+      if (tr.s < car.s - 40 || tr.s > car.s + 900) tr.s = car.s + 350 + rnd() * 450;
+      placeVehicle(tr.veh, tr.s, -laneLat(), true);
+    });
+  }
+
+  // ---------- ADB scenario (adbSim "Road-illuminate scenario" file) ----------
+  var ADB = { on: false, sc: null, k: -1, t: 0, tEnd: 0, playing: false, vEgo: 0, lb: {}, segs: {}, hb: {}, tex: {}, veh: {}, prev: null };
+  function adbPrepare(o, name) {
+    if (!o || o.format !== 'adbsim-road-scenario') throw new Error('This is not an adbSim road scenario (format "adbsim-road-scenario").');
+    if ((o.formatVersion | 0) > 1) throw new Error('Scenario format ' + o.formatVersion + ' is newer than this page.');
+    if (!o.frames || !o.frames.length) throw new Error('The scenario has no frames.');
+    var ph = o.photometry || {}, flip = ph.fileHPlusRight === false, cache = [], out = { lb: {}, segs: {} };
+    function grid(f, label) {
+      if (!f) return null;
+      for (var c = 0; c < cache.length; c++) if (cache[c][0] === f) return cache[c][1];
+      var g; try { g = gridFromIES(parseIES(f.ies), flip); } catch (e) { throw new Error(label + ' (' + f.name + '): ' + e.message); }
+      cache.push([f, g]); return g;
+    }
+    var pick = function (obj, k) { return obj ? (obj[k] || obj.L) : null; };
+    var sameR = !(ph.lowBeam && ph.lowBeam.R) && !(ph.highBeam && ph.highBeam.R) && !(ph.segments && ph.segments.R);
+    ['L', 'R'].forEach(function (k) {
+      if (k === 'R' && sameR) { out.lb.R = out.lb.L; out.segs.R = out.segs.L; return; }
+      out.lb[k] = grid(pick(ph.lowBeam, k), 'Low beam') || new Float32Array(GRID.NH * GRID.NV);
+      if (ph.mode === 'synthetic') {
+        var hb = grid(pick(ph.highBeam, k), 'High beam'); if (!hb) throw new Error('The scenario has no high-beam file.');
+        if (!ph.edges || ph.edges.length < 2) throw new Error('The scenario has no segment boundaries.');
+        out.segs[k] = ph.edges.slice(0, -1).map(function (_, i) { return cropGrid(adbMaskedGrid(hb, i, ph.edges, +ph.softEdge_deg || 0)); });
+      } else {
+        var fs = pick(ph.segments, k) || []; if (!fs.length) throw new Error('The scenario has no segment files.');
+        out.segs[k] = fs.map(function (f, i) { return cropGrid(grid(f, 'Segment ' + (i + 1))); });
+      }
+    });
+    ['L', 'R'].forEach(function (k) {
+      var n = out.segs[k].length;
+      o.frames.forEach(function (f, i) { if (!f.weights || !f.weights[k] || f.weights[k].length !== n) throw new Error('Frame ' + (i + 1) + ': the ' + (k === 'L' ? 'left' : 'right') + ' lamp needs ' + n + ' segment weights.'); });
+    });
+    return out;
+  }
+  function adbLoad(text, name) {
+    var o = JSON.parse(text), prep = adbPrepare(o, name);
+    if (!ADB.on) ADB.prev = { lampH: $('lampH').value, lampS: $('lampS').value, aimV: $('aimV').value, roadW: $('roadW').value, side: cfg.side, flat: $('flatRoad').checked, lb: cfg.lb, hb: cfg.hb, s: car.s, paused: paused };
+    ADB.sc = o; ADB.name = name; ADB.lb = prep.lb; ADB.segs = prep.segs;
+    ADB.hb = { L: new Float32Array(GRID.NH * GRID.NV), R: new Float32Array(GRID.NH * GRID.NV) };
+    ADB.tEnd = o.frames[o.frames.length - 1].t; ADB.vEgo = (+o.egoSpeed_kmh || 0) / 3.6; ADB.t = 0; ADB.k = -1; ADB.playing = false;
+    ADB.veh = {};
+    o.frames[0].targets.forEach(function (t) { ADB.veh[t.id] = makeVehicle(/truck/.test(t.type) ? 'truck' : 'car'); });
+    // vehicle and road as in adbSim: straight and flat, lanes from the scenario
+    var m = o.mounting || {}, rd = o.road || {};
+    $('lampH').value = (+m.height || 0.65).toFixed(2); $('lampS').value = (+m.separation || 1.4).toFixed(2); $('aimV').value = (+m.aimV_deg || 0).toFixed(2);
+    $('roadW').value = (2 * (+rd.laneWidth || 3.5)).toFixed(1);
+    var side = rd.traffic === 'LHT' ? 'LHT' : 'RHT';
+    if (side !== cfg.side) { cfg.side = side; setSeg('segSide', side); var e = Math.abs(num('eyeL', -1, 1, 0.37)); $('eyeL').value = (side === 'RHT' ? -e : e).toFixed(2); buildCockpit(); }
+    $('flatRoad').checked = true; STRAIGHT.on = true; ADB.on = true; applyProfile();
+    car.s = 0; resetCar(); setPaused(true);
+    readInputs(); setBeam('lb', true); setBeam('hb', true); rebuildBeams();
+    adbSetTime(0, true); adbUI();
+    var notes = [];
+    if ((rd.lanesPerDir | 0) > 1) notes.push('the scenario has ' + rd.lanesPerDir + ' lanes per direction; this road shows one each way');
+    if (Math.abs(+m.aimH_deg || 0) > 1e-9) notes.push('horizontal aim ' + m.aimH_deg + '° is not applied');
+    $('adbNote').textContent = 'Straight, flat road as in adbSim; the car follows the scenario at ' + Math.round(ADB.vEgo * 3.6) + ' km/h.' + (notes.length ? ' Note: ' + notes.join('; ') + '.' : '');
+  }
+  function adbUnload() {
+    if (!ADB.on) return;
+    var p = ADB.prev; ADB.on = false; ADB.playing = false; ADB.sc = null;
+    Object.keys(ADB.veh).forEach(function (id) { scene.remove(ADB.veh[id]); }); ADB.veh = {};
+    $('lampH').value = p.lampH; $('lampS').value = p.lampS; $('aimV').value = p.aimV; $('roadW').value = p.roadW;
+    if (p.side !== cfg.side) { cfg.side = p.side; setSeg('segSide', p.side); var e = Math.abs(num('eyeL', -1, 1, 0.37)); $('eyeL').value = (p.side === 'RHT' ? -e : e).toFixed(2); buildCockpit(); }
+    $('flatRoad').checked = p.flat; STRAIGHT.on = false; applyProfile();
+    car.s = p.s; resetCar(); setPaused(p.paused);
+    readInputs(); setBeam('lb', p.lb); setBeam('hb', p.hb); rebuildBeams(); adbUI();
+    $('adbNote').textContent = 'Scenario unloaded.';
+  }
+  function frameAt(t) { var fr = ADB.sc.frames, k = 0; while (k + 1 < fr.length && fr[k + 1].t <= t + 1e-9) k++; return k; }
+  function adbSetTime(t, force) {
+    ADB.t = Math.max(0, Math.min(ADB.tEnd, t));
+    var k = frameAt(ADB.t);
+    if (k !== ADB.k || force) {
+      ADB.k = k; var w = ADB.sc.frames[k].weights;
+      adbSum(ADB.hb.L, ADB.segs.L, w.L); adbSum(ADB.hb.R, ADB.segs.R, w.R);
+      if (ADB.tex.L) ADB.tex.L.needsUpdate = true; if (ADB.tex.R && ADB.tex.R !== ADB.tex.L) ADB.tex.R.needsUpdate = true;
+      updateProbe(); adbHud();
+    }
+    $('adbT').value = ADB.t; $('adbTime').textContent = ADB.t.toFixed(2) + ' s';
+  }
+  // the car on its lane at the scenario time; targets between frames are interpolated in distance
+  function adbPlace() {
+    car.s = ADB.vEgo * ADB.t;
+    var tt = trackAt(car.s), l = laneLat();
+    car.x = tt.x + Math.cos(tt.th) * l; car.z = tt.z + Math.sin(tt.th) * l; car.psi = tt.th; car.lat = l; car.v = ADB.vEgo;
+    var fr = ADB.sc.frames, a = fr[ADB.k], b = fr[Math.min(ADB.k + 1, fr.length - 1)], u = b.t > a.t ? (ADB.t - a.t) / (b.t - a.t) : 0;
+    var show = $('trafficOn').checked;
+    a.targets.forEach(function (ta) {
+      var v = ADB.veh[ta.id]; if (!v) return;
+      var tb = b.targets.filter(function (x) { return x.id === ta.id; })[0] || ta, o1 = ta.outline, o2 = tb.outline;
+      var x0 = o1.x0 + (o2.x0 - o1.x0) * u, x1 = o1.x1 + (o2.x1 - o1.x1) * u, yc = (o1.y0 + o1.y1) / 2;
+      var oncoming = ta.direction ? ta.direction === 'oncoming' : /oncoming/.test(ta.type);
+      if (!show || x1 < -10) { v.visible = false; return; }
+      placeVehicle(v, car.s + (oncoming ? x0 : x1), laneLat() - yc, oncoming);    // adbSim y is left-positive, lat is right-positive
+    });
+  }
+  function adbUI() {
+    var on = ADB.on, sc = ADB.sc;
+    $('adbPlay').disabled = !on || sc.frames.length < 2; $('adbT').disabled = !on || sc.frames.length < 2; $('adbHud').hidden = !on;
+    $('adbPlay').textContent = ADB.playing ? 'Pause' : 'Play';
+    ['lampH', 'lampS', 'aimV', 'roadW', 'flatRoad', 'flipH', 'speed', 'auto'].forEach(function (id) { $(id).disabled = on; });
+    Array.prototype.forEach.call(document.querySelectorAll('#segSide button, .slot input[data-slot], .slot [data-clear], .slot label[for$="_f"]:not([for="adb_f"])'), function (el) { el.disabled = on; el.style.opacity = on ? 0.5 : ''; el.style.pointerEvents = on ? 'none' : ''; });
+    if (!on) { $('svAdb').textContent = 'none'; $('adb_s').textContent = 'Export it in adbSim: Project and export, Road-illuminate scenario'; $('adbTime').textContent = '–'; return; }
+    var n = ADB.segs.L.length;
+    $('svAdb').textContent = n + ' segments · ' + sc.frames.length + ' frame' + (sc.frames.length > 1 ? 's' : '');
+    $('adb_s').textContent = ADB.name + ' · ' + (sc.generator || 'adbSim') + ' · ' + (sc.photometry.mode === 'synthetic' ? 'high beam + boundaries' : n + ' segment files') + ' · ' + (ADB.segs.R === ADB.segs.L ? 'right lamp uses the left files' : 'separate right-lamp files');
+    $('adbT').max = ADB.tEnd; $('adbT').step = Math.max(0.005, ADB.tEnd / 500);
+  }
+  function adbRes(r) { return r === 'fail' ? '<span class="rf">✗ Fail</span>' : r === 'pass' ? '<span class="rp">✓ Pass</span>' : '<span class="rn">– No limit</span>'; }
+  function adbHud() {
+    if (!ADB.on) return;
+    var f = ADB.sc.frames[ADB.k], esc = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+    var offs = function (k) { var o = []; f.weights[k].forEach(function (w, i) { if (w <= 0) o.push(i + 1); }); return o.length ? o.join(' ') : 'none'; };
+    var lx = function (e) { return e == null ? '—' : (e >= 10 ? e.toFixed(0) : e >= 1 ? e.toFixed(1) : e.toFixed(3)) + ' lx'; };
+    $('adbHud').innerHTML = '<b>ADB</b> t ' + f.t.toFixed(2) + ' s · frame ' + (ADB.k + 1) + '/' + ADB.sc.frames.length +
+      (f.keptFlux != null ? ' · kept flux ' + (100 * f.keptFlux).toFixed(0) + ' %' : '') + (f.fallback ? ' · low-beam fallback' : '') +
+      '<div>Segments off · left: ' + offs('L') + ' · right: ' + offs('R') + '</div>' +
+      f.targets.filter(function (t) { return t.outline.x1 > -10; }).map(function (t) {
+        var eye = t.points.filter(function (p) { return /eye/.test(p.id); })[0] || t.points[0];
+        var worst = t.points.some(function (p) { return p.result === 'fail'; }) ? 'fail' : t.points.some(function (p) { return p.result === 'pass'; }) ? 'pass' : 'none';
+        return '<div>T' + t.n + ' ' + esc(t.label) + ' ' + t.d.toFixed(0) + ' m' + (t.detected ? '' : ' <span class="off">(not detected)</span>') +
+          (eye ? ' · ' + esc(eye.label) + ' ' + lx(eye.E_lx) : '') + ' ' + adbRes(worst) + '</div>';
+      }).join('');
+  }
+  function adbTogglePlay() {
+    if (!ADB.on || ADB.sc.frames.length < 2) return;
+    if (!ADB.playing && ADB.t >= ADB.tEnd - 1e-9) adbSetTime(0);
+    ADB.playing = !ADB.playing; adbUI();
+  }
+  $('adb_f').addEventListener('change', function () {
+    var f = this.files[0]; this.value = ''; if (!f) return;
+    var el = $('adb_s'); el.textContent = 'Loading ' + f.name + '…'; el.classList.remove('err');
+    var rd = new FileReader();
+    rd.onload = function () { setTimeout(function () {
+      try { adbLoad(String(rd.result), f.name); $('secAdb').open = true; }
+      catch (e) { el.classList.add('err'); el.textContent = f.name + ' could not be loaded. ' + e.message; }
+    }, 30); };
+    rd.readAsText(f);
+  });
+  $('adbOff').addEventListener('click', adbUnload);
+  $('adbPlay').addEventListener('click', adbTogglePlay);
+  $('adbT').addEventListener('input', function () { if (!ADB.on) return; ADB.playing = false; adbUI(); adbSetTime(+this.value); });
+  window.virtualNightDrive = { adb: { load: function (text, name) { adbLoad(text, name || 'scenario.json'); }, time: function (t) { ADB.playing = false; adbSetTime(t); }, unload: adbUnload, play: adbTogglePlay, get on() { return ADB.on; }, get frame() { return ADB.k; },
+      vehicles: function () { return Object.keys(ADB.veh).map(function (id) { var v = ADB.veh[id]; return { id: +id, kind: v.userData.kind, visible: v.visible, x: +v.position.x.toFixed(3), z: +v.position.z.toFixed(3), heading: +(-v.rotation.y).toFixed(4) }; }); },
+      car: function () { return { s: car.s, x: car.x, z: car.z }; } },
+    roadIlluminance: function (d, lat) { return roadIlluminance(d, lat, cfg, grids); } };
 
   // ---------- Controls ----------
   function num(id, lo, hi, fb) { var v = parseFloat($(id).value); if (isNaN(v)) return fb; return Math.min(hi, Math.max(lo, v)); }
@@ -1326,7 +1581,7 @@ function lightRGB(src, D) {
   function applyProfile() {
     PROFILE.on = !$('flatRoad').checked; ribBase = null;
     var lo = Infinity; for (var i = 0; i <= TRACK.P; i++) lo = Math.min(lo, TRACK.y[i]);
-    farG.position.y = PROFILE.on ? lo - 1 : -0.05;       // distant ground below the lowest point of the road
+    farG.position.y = PROFILE.on && !STRAIGHT.on ? lo - 1 : -0.05;       // distant ground below the lowest point of the road
     $('adaptEst').textContent = PROFILE.on ? 'Flat-road estimate' : 'Road estimate';
     updateProbe();
   }
@@ -1468,12 +1723,12 @@ function lightRGB(src, D) {
     else if (k === 'm') $('markers').checked = !$('markers').checked;
     else if (k === 'f') { if (full) exitFull(); else enterFull(); }
     else if (k === 'escape' && full && !fsElement()) exitFull();
-    else if (k === ' ') { setPaused(!paused); e.preventDefault(); }
+    else if (k === ' ') { if (ADB.on) adbTogglePlay(); else setPaused(!paused); e.preventDefault(); }
   });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
 
   // IES files
-  Array.prototype.forEach.call(document.querySelectorAll('input[type=file]'), function (inp) {
+  Array.prototype.forEach.call(document.querySelectorAll('input[type=file][data-slot]'), function (inp) {
     inp.addEventListener('change', function () {
       var f = inp.files[0], slot = inp.dataset.slot, el = $(slot + '_s'); if (!f) return;
       var rd = new FileReader();
@@ -1499,7 +1754,10 @@ function lightRGB(src, D) {
   var fwd = new THREE.Vector3(), right = new THREE.Vector3(), upv = new THREE.Vector3(0, 1, 0), tmp = new THREE.Vector3(), last = performance.now(), driven = 0, adapt = 0, tick = 0;
   function frame(now) {
     var dt = Math.min(0.05, (now - last) / 1000); last = now;
-    if (!paused) {
+    if (ADB.on) {                     // the scenario drives the car and the targets
+      if (ADB.playing) { adbSetTime(ADB.t + dt * parseFloat($('adbRate').value)); if (ADB.t >= ADB.tEnd - 1e-9) { ADB.playing = false; adbUI(); } }
+      adbPlace();
+    } else if (!paused) {
       var target = +$('speed').value / 3.6;
       car.v += (target - car.v) * Math.min(1, dt * 0.8);
       var st = steer + (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
@@ -1510,7 +1768,8 @@ function lightRGB(src, D) {
       } else car.psi += st * 0.35 * Math.min(1, car.v / 5) * dt;
       car.x += Math.sin(car.psi) * car.v * dt; car.z -= Math.cos(car.psi) * car.v * dt; driven += car.v * dt;
     }
-    projectCar();
+    if (!ADB.on) projectCar();
+    updateTraffic(dt);
     var tc = trackAt(car.s); car.y = tc.y; car.g = tc.g;           // the car sits on the road and pitches with its grade
     var vf = vehicleFrame(car.psi, car.g);
     fwd.fromArray(vf.F); right.fromArray(vf.R); upv.fromArray(vf.U);
