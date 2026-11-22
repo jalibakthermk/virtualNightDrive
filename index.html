@@ -1386,7 +1386,10 @@ function lightRGB(src, D) {
     var notes = [];
     if ((rd.lanesPerDir | 0) > 1) notes.push('the scenario has ' + rd.lanesPerDir + ' lanes per direction; this road shows one each way');
     if (Math.abs(+m.aimH_deg || 0) > 1e-9) notes.push('horizontal aim ' + m.aimH_deg + '° is not applied');
-    $('adbNote').textContent = 'Straight, flat road as in adbSim; the car follows the scenario at ' + Math.round(ADB.vEgo * 3.6) + ' km/h.' + (notes.length ? ' Note: ' + notes.join('; ') + '.' : '');
+    $('adbNote').textContent = (o.frames.length < 2
+      ? 'Still scene: this file has one frame, so there is nothing to play. To play a scenario, switch on "Targets move" under Dynamic scenario in adbSim before exporting.'
+      : 'Straight, flat road as in adbSim; the car follows the scenario at ' + Math.round(ADB.vEgo * 3.6) + ' km/h. Press Play scenario (or Space).') +
+      (notes.length ? ' Note: ' + notes.join('; ') + '.' : '');
   }
   function adbUnload() {
     if (!ADB.on) return;
@@ -1429,8 +1432,13 @@ function lightRGB(src, D) {
   }
   function adbUI() {
     var on = ADB.on, sc = ADB.sc;
-    $('adbPlay').disabled = !on || sc.frames.length < 2; $('adbT').disabled = !on || sc.frames.length < 2; $('adbHud').hidden = !on;
-    $('adbPlay').textContent = ADB.playing ? 'Pause' : 'Play';
+    var still = on && sc.frames.length < 2;
+    $('adbPlay').disabled = !on || still; $('adbT').disabled = !on || still; $('adbHud').hidden = !on;
+    $('adbPlay').textContent = still ? 'Still scene' : ADB.playing ? 'Pause' : 'Play';
+    if (on) {                         // the button next to the view plays the scenario while one is loaded
+      $('btnPause').textContent = still ? 'Still scene' : ADB.playing ? 'Pause' : 'Play scenario'; $('btnPause').disabled = still;
+      $('btnSave').hidden = ADB.playing;
+    } else { $('btnPause').disabled = false; setPaused(paused); }
     ['lampH', 'lampS', 'aimV', 'roadW', 'flatRoad', 'flipH', 'speed', 'auto'].forEach(function (id) { $(id).disabled = on; });
     Array.prototype.forEach.call(document.querySelectorAll('#segSide button, .slot input[data-slot], .slot [data-clear], .slot label[for$="_f"]:not([for="adb_f"])'), function (el) { el.disabled = on; el.style.opacity = on ? 0.5 : ''; el.style.pointerEvents = on ? 'none' : ''; });
     if (!on) { $('svAdb').textContent = 'none'; $('adb_s').textContent = 'Export it in adbSim: Project and export, Road-illuminate scenario'; $('adbTime').textContent = '–'; return; }
@@ -1445,7 +1453,7 @@ function lightRGB(src, D) {
     var f = ADB.sc.frames[ADB.k], esc = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
     var offs = function (k) { var o = []; f.weights[k].forEach(function (w, i) { if (w <= 0) o.push(i + 1); }); return o.length ? o.join(' ') : 'none'; };
     var lx = function (e) { return e == null ? '—' : (e >= 10 ? e.toFixed(0) : e >= 1 ? e.toFixed(1) : e.toFixed(3)) + ' lx'; };
-    $('adbHud').innerHTML = '<b>ADB</b> t ' + f.t.toFixed(2) + ' s · frame ' + (ADB.k + 1) + '/' + ADB.sc.frames.length +
+    $('adbHud').innerHTML = '<b>ADB</b> ' + (ADB.sc.frames.length < 2 ? 'still scene' : 't ' + f.t.toFixed(2) + ' s · frame ' + (ADB.k + 1) + '/' + ADB.sc.frames.length) +
       (f.keptFlux != null ? ' · kept flux ' + (100 * f.keptFlux).toFixed(0) + ' %' : '') + (f.fallback ? ' · low-beam fallback' : '') +
       '<div>Segments off · left: ' + offs('L') + ' · right: ' + offs('R') + '</div>' +
       f.targets.filter(function (t) { return t.outline.x1 > -10; }).map(function (t) {
@@ -1701,7 +1709,7 @@ function lightRGB(src, D) {
   ['fullscreenchange', 'webkitfullscreenchange'].forEach(function (n) {
     document.addEventListener(n, function () { if (!fsElement() && realFull) { realFull = false; setFull(false); } });
   });
-  $('btnPause').addEventListener('click', function () { setPaused(!paused); });
+  $('btnPause').addEventListener('click', function () { if (ADB.on) adbTogglePlay(); else setPaused(!paused); });
   $('btnReset').addEventListener('click', resetCar);
 
   function manual() { $('auto').checked = false; }
@@ -1791,7 +1799,9 @@ function lightRGB(src, D) {
     $('hudSpeed').textContent = Math.round(car.v * 3.6);
     $('cockpit').hidden = cockpit === 'off' || view !== 'driver';
     if (ckSpeed) { ckSpeed.textContent = Math.round(car.v * 3.6); ckLow.setAttribute('opacity', cfg.lb ? 1 : 0.12); ckHigh.setAttribute('opacity', cfg.hb ? 1 : 0.12); }
-    $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.lat - laneLat() >= 0 ? '+' : '') + (car.lat - laneLat()).toFixed(2) + ' m from lane centre';
+    if (ADB.on) $('hudMeta').textContent = ADB.sc.frames.length < 2 ? 'ADB scenario: still scene (one frame)'
+      : 'ADB scenario · t ' + ADB.t.toFixed(2) + ' of ' + ADB.tEnd.toFixed(2) + ' s · ' + (ADB.playing ? 'playing' : 'paused, press Play scenario or Space');
+    else $('hudMeta').textContent = Math.round(driven).toLocaleString() + ' m driven · ' + (car.lat - laneLat() >= 0 ? '+' : '') + (car.lat - laneLat()).toFixed(2) + ' m from lane centre';
     renderShadows();
     shared.uWind.value = 1;                                   // reflections are scene luminance outside the glass
     renderReflections(surf === 'wet' && view === 'driver');
