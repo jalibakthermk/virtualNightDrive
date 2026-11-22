@@ -29,20 +29,20 @@
   --accent:#f0a43a; --accent-ink:#1b1206; --accent-soft:#33260f; --fail:#ff6b5d; color-scheme:dark;}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html,body{height:100%}
+html,body{height:100%;overflow:hidden}
 body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;font-variant-numeric:tabular-nums;overflow:hidden;
   padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px));padding-block:12px}
 .wrap{max-width:1600px;height:100%;margin:0 auto}
 .bench{display:grid;grid-template-columns:372px minmax(0,1fr);gap:16px;height:100%}
 
 /* ---- control rail ---- */
-aside{background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+aside{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 aside header{padding:12px 14px;border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px}
 .logo{width:32px;height:32px;flex:none}
 h1{font-family:var(--f-display);font-weight:700;font-size:22px;letter-spacing:.01em;margin:0;line-height:1}
 .sub{color:var(--muted);margin:3px 0 0;font-size:13px;line-height:1.3}
-.rail-body{overflow-y:auto;overscroll-behavior:contain;padding:4px 14px 14px;min-height:0}
+.rail-body{position:relative;overflow-y:auto;overscroll-behavior:contain;padding:4px 14px 14px;min-height:0}
 .secs{display:flex;flex-direction:column}
 details.sec{border-bottom:1px solid var(--line-soft)}
 details.sec:last-child{border-bottom:0}
@@ -74,13 +74,13 @@ input[type=range]{width:100%;padding:0;margin:0;background:transparent;border:0;
 .kvrow .val{font:600 15px var(--f-body);color:var(--ink);text-align:right}
 .note{font-size:13px;line-height:1.45;color:var(--muted);margin:0}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid var(--line);vertical-align:-1px;margin-right:6px}
-.slot{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;border:1.5px dashed var(--line);border-radius:7px;padding:8px 10px;background:var(--sunk)}
+.slot{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;border:1.5px dashed var(--line);border-radius:7px;padding:8px 10px;background:var(--sunk)}
 .slot:hover{border-color:var(--accent)}
 .slot:focus-within{outline:2px solid var(--accent);outline-offset:1px}
 .slot b{font-weight:600;font-size:14.5px;display:block}
 .slot span{color:var(--muted);font-size:13px;display:block;overflow-wrap:anywhere}
 .slot span.err{color:var(--fail)}
-.slot input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.slot input[type=file]{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
 .btn{font:600 14px var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:5px;padding:7px 12px;cursor:pointer;align-self:start}
 .btn:hover{border-color:var(--muted)}
 kbd{font:12px var(--f-mono);background:var(--sunk);border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--ink)}
@@ -91,7 +91,7 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
 .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
 .bar .seg{flex:0 1 auto}
 .bar .seg button{padding:6px 12px;white-space:nowrap}
-.stage{position:relative;flex:1;min-height:0;background:var(--plot-bg);overflow:hidden;color:var(--plot-ink)}
+.stage{position:relative;touch-action:none;flex:1;min-height:0;background:var(--plot-bg);overflow:hidden;color:var(--plot-ink)}
 .stage canvas{display:block;width:100%;height:100%}
 .foot{display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:space-between;align-items:center;padding:8px 14px;background:var(--plot-bg);color:var(--plot-ink);border-top:1px solid rgba(255,255,255,.07);min-height:38px}
 .readout{font-size:13.5px}
@@ -1675,6 +1675,7 @@ function lightRGB(src, D) {
     } else finish();
   }
   $('btnSave').addEventListener('click', exportPng);
+  window.addEventListener('scroll', function () { if (window.scrollX || window.scrollY) window.scrollTo(0, 0); });
 
   // full screen: the browser's own full screen of the view card, with a landscape lock where the device allows it;
   // where the browser refuses (iPhone, embedded views) the card fills the window and CSS turns it on an upright phone
@@ -1719,9 +1720,17 @@ function lightRGB(src, D) {
   }
   hold($('steerL'), -1); hold($('steerR'), 1);
 
+  // driving keys never take a key a focused control needs: text and number fields keep every key, other controls
+  // (buttons, checkboxes, sliders, group headers) keep Space, Enter and the arrows, and nothing in the settings rail
+  // gives up the arrows or Space, so they scroll and operate it as usual. Letters drive from anywhere else.
+  var navKeys = { ' ': 1, 'enter': 1, 'arrowup': 1, 'arrowdown': 1, 'arrowleft': 1, 'arrowright': 1, 'pageup': 1, 'pagedown': 1, 'home': 1, 'end': 1 };
   window.addEventListener('keydown', function (e) {
-    if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
-    var k = e.key.toLowerCase();
+    var t = e.target, tag = (t && t.tagName) || '', k = e.key.toLowerCase();
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && t.type !== 'range' && t.type !== 'checkbox')) return;
+    var control = tag === 'INPUT' || tag === 'BUTTON' || tag === 'SUMMARY' || tag === 'LABEL' || tag === 'A';
+    var inRail = !!(t && t.closest && t.closest('#rail'));
+    if (navKeys[k] && (control || inRail)) return;
     if (k === 'a' || k === 'arrowleft' || k === 'd' || k === 'arrowright') { keys[k] = true; manual(); e.preventDefault(); }
     else if (k === 'w' || k === 'arrowup') { $('speed').value = Math.min(130, +$('speed').value + 5); readInputs(); e.preventDefault(); }
     else if (k === 's' || k === 'arrowdown') { $('speed').value = Math.max(0, +$('speed').value - 5); readInputs(); e.preventDefault(); }
