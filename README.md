@@ -1,7 +1,7 @@
 # virtualNightDrive
 
 A night-driving view lit per pixel from headlamp IES files. One self-contained page, `index.html`: open it in a browser
-with WebGL 2 (it loads Three.js r128 and two web fonts from public CDNs, so it needs internet).
+with WebGL 2 (it loads Three.js r128 and the shared [beamKit](https://jalibakthermk.github.io/beamkit/demo.html) styles and fonts from the web, so it needs internet).
 
 ## Inputs
 

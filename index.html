@@ -4,44 +4,48 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>body{margin:0}[hidden]{display:none!important}</style>
-<title>Virtual Driver</title>
+<title>virtualNightDrive — night drive lit by your headlamp IES files</title>
+<meta name="description" content="virtualNightDrive: drive a virtual night road with trees and sign boards, lit per pixel by your headlamp IES files.">
+<meta name="theme-color" content="#0a0f2c">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@600;700&family=Source+Sans+3:wght@400;600&display=swap">
+<!-- beamKit: shared design framework for the lighting tools (https://jalibakthermk.github.io/beamkit/) -->
+<link rel="stylesheet" href="https://jalibakthermk.github.io/beamkit/beamkit.css">
+<script>try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
+<script src="https://jalibakthermk.github.io/beamkit/beamkit.js" defer></script>
 <style>
 /* Bench layout from Beam Synth: a settings rail on the left in collapsible groups that show their state when closed,
    and the driving view on the right as a dark plot card with its view controls in the bar. The view is always dark;
    everything else follows the light or dark theme. */
+/* Colour and font names mapped onto the shared beamKit tokens (light and dark come from beamkit.css).
+   Fallback values keep the page usable if beamkit.css cannot load (e.g. offline). */
 :root{
-  --bg:#f3f5f6; --surface:#ffffff; --sunk:#e9edf0; --ink:#15212b; --muted:#55656f; --line:#d5dce1; --line-soft:#e6ebee;
-  --accent:#9a5600; --accent-ink:#ffffff; --accent-soft:#f7e9d3; --fail:#c0332a;
+  --bg:var(--cds-background,#f2f4f8); --surface:var(--cds-layer-01,#fff); --sunk:var(--cds-layer-02,#e8ebf1);
+  --ink:var(--cds-text-primary,#161616); --muted:var(--cds-text-secondary,#525a66);
+  --line:var(--cds-border-subtle,#d5d9e0); --line-soft:var(--cds-grid,#e4e7ec);
+  --accent:var(--cds-button-primary,#0f62fe); --accent-ink:#ffffff; --accent-soft:var(--cds-info-bg,#edf5ff);
+  --pass:var(--cds-ok,#24a148); --fail:var(--cds-bad,#da1e28); --good:var(--cds-ok,#24a148); --bad:var(--cds-bad,#da1e28);
+  --info:var(--cds-text-helper,#6f7682); --warn:var(--cds-warn-text,#8e6a00);
+  --f-display:var(--font-display,"Arial Narrow",sans-serif);
+  --f-body:var(--font-body,"Segoe UI",system-ui,sans-serif);
+  --f-mono:var(--font-mono,ui-monospace,monospace);
   --plot-bg:#0d151d; --plot-ink:#c7d4de; --plot-dim:#8494a1; --plot-line:rgba(199,212,222,.18); --plot-glass:rgba(13,21,29,.74);
   --plot-accent:#f0a43a; --low:#3ddc84; --high:#4aa8ff; --plot-bad:#ff6b5d;
-  --f-display:"Saira Semi Condensed","Arial Narrow",sans-serif;
-  --f-body:"Source Sans 3","Segoe UI",system-ui,sans-serif;
-  --f-mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
 }
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#0b1117; --surface:#121b23; --sunk:#0c141b; --ink:#e3e9ee; --muted:#93a3af; --line:#25343f; --line-soft:#1b2832;
-  --accent:#f0a43a; --accent-ink:#1b1206; --accent-soft:#33260f; --fail:#ff6b5d; color-scheme:dark;}}
-:root[data-theme="dark"]{
-  --bg:#0b1117; --surface:#121b23; --sunk:#0c141b; --ink:#e3e9ee; --muted:#93a3af; --line:#25343f; --line-soft:#1b2832;
-  --accent:#f0a43a; --accent-ink:#1b1206; --accent-soft:#33260f; --fail:#ff6b5d; color-scheme:dark;}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%;overflow:hidden}
-body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;font-variant-numeric:tabular-nums;overflow:hidden;
-  padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px));padding-block:12px}
-.wrap{max-width:1600px;height:100%;margin:0 auto}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.45;font-variant-numeric:tabular-nums;overflow:hidden;
+  margin:0;display:flex;flex-direction:column}
+/* the shared beamKit shell bar on top; the bench fills the rest of the window */
+.wrap.app{max-width:1600px;width:100%;flex:1;min-height:0;margin:0 auto;
+  padding:12px max(12px,env(safe-area-inset-right,0px)) 12px max(12px,env(safe-area-inset-left,0px))}
 .bench{display:grid;grid-template-columns:372px minmax(0,1fr);gap:16px;height:100%}
 
 /* ---- control rail ---- */
-aside{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-aside header{padding:12px 14px;border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:10px}
-.logo{width:32px;height:32px;flex:none}
-h1{font-family:var(--f-display);font-weight:700;font-size:22px;letter-spacing:.01em;margin:0;line-height:1}
-.sub{color:var(--muted);margin:3px 0 0;font-size:13px;line-height:1.3}
+aside{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:0;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .rail-body{position:relative;overflow-y:auto;overscroll-behavior:contain;padding:4px 14px 14px;min-height:0}
 .secs{display:flex;flex-direction:column}
 details.sec{border-bottom:1px solid var(--line-soft)}
@@ -58,14 +62,16 @@ details.sec[open] .sv{visibility:hidden}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:13.5px;color:var(--muted);min-width:0}
 label.f small,.kvrow small{font-size:12.5px;color:var(--muted)}
-input[type=number],input[type=text]{font:15px var(--f-body);font-variant-numeric:tabular-nums;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:7px 9px;width:100%;min-width:0}
-input[type=number]:hover,input[type=text]:hover{border-color:var(--muted)}
+input[type=number],input[type=text]{font:14px var(--f-body);font-variant-numeric:tabular-nums;color:var(--ink);background:var(--sunk);border:0;border-bottom:1px solid var(--cds-border-strong,#8d8d8d);border-radius:0;padding:0 9px;height:36px;width:100%;min-width:0}
+input[type=number]{font-family:var(--f-mono);font-size:13px}
+input[type=number]:hover,input[type=text]:hover{background:var(--cds-layer-hover-01,#f7f9fc)}
+input[type=number]:focus,input[type=text]:focus{outline:2px solid var(--cds-focus,#0f62fe);outline-offset:-2px}
 input[type=range]{width:100%;padding:0;margin:0;background:transparent;border:0;accent-color:var(--accent);height:26px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .qhead{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .sval{font:600 15px var(--f-body);color:var(--ink)}
-.seg{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);background:var(--sunk);border-radius:7px;padding:3px;gap:3px}
-.seg button{font:600 14px var(--f-body);border:0;border-radius:5px;padding:7px 6px;background:transparent;color:var(--muted);cursor:pointer;min-width:0}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);background:var(--sunk);border-radius:0;padding:3px;gap:3px}
+.seg button{font:600 14px var(--f-body);border:0;border-radius:0;padding:7px 6px;background:transparent;color:var(--muted);cursor:pointer;min-width:0}
 .seg button:hover{color:var(--ink)}
 .seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
 .chk{display:flex;align-items:center;gap:8px;font-size:14.5px;cursor:pointer}
@@ -74,20 +80,20 @@ input[type=range]{width:100%;padding:0;margin:0;background:transparent;border:0;
 .kvrow .val{font:600 15px var(--f-body);color:var(--ink);text-align:right}
 .note{font-size:13px;line-height:1.45;color:var(--muted);margin:0}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid var(--line);vertical-align:-1px;margin-right:6px}
-.slot{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;border:1.5px dashed var(--line);border-radius:7px;padding:8px 10px;background:var(--sunk)}
+.slot{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;border:1.5px dashed var(--line);border-radius:0;padding:8px 10px;background:var(--sunk)}
 .slot:hover{border-color:var(--accent)}
 .slot:focus-within{outline:2px solid var(--accent);outline-offset:1px}
 .slot b{font-weight:600;font-size:14.5px;display:block}
 .slot span{color:var(--muted);font-size:13px;display:block;overflow-wrap:anywhere}
 .slot span.err{color:var(--fail)}
 .slot input[type=file]{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none}
-.btn{font:600 14px var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:5px;padding:7px 12px;cursor:pointer;align-self:start}
+.btn{font:600 14px var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:0;padding:7px 12px;cursor:pointer;align-self:start}
 .btn:hover{border-color:var(--muted)}
-kbd{font:12px var(--f-mono);background:var(--sunk);border:1px solid var(--line);border-radius:3px;padding:0 4px;color:var(--ink)}
+kbd{font:12px var(--f-mono);background:var(--sunk);border:1px solid var(--line);border-radius:0;padding:0 4px;color:var(--ink)}
 
 /* ---- the view: a dark plot card ---- */
 main{min-width:0;min-height:0;display:flex;flex-direction:column}
-.screen{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;min-width:0;min-height:0;display:flex;flex-direction:column;flex:1}
+.screen{background:var(--surface);border:1px solid var(--line);border-radius:0;overflow:hidden;min-width:0;min-height:0;display:flex;flex-direction:column;flex:1}
 .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
 .bar .seg{flex:0 1 auto}
 .bar .seg button{padding:6px 12px;white-space:nowrap}
@@ -97,7 +103,7 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
 .readout{font-size:13.5px}
 .keys{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px}
 .legend{width:170px;font-size:12px;color:var(--plot-dim)}
-.legend i{display:block;height:8px;border-radius:2px;background:linear-gradient(90deg,#1b2a8c,#17a6c4,#35b657,#f2d13a,#e8402a)}
+.legend i{display:block;height:8px;border-radius:0;background:linear-gradient(90deg,#1b2a8c,#17a6c4,#35b657,#f2d13a,#e8402a)}
 .legend div{display:flex;justify-content:space-between;margin-top:2px}
 .isokey{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12.5px;color:var(--plot-dim)}
 .isokey span{display:flex;align-items:center;gap:5px}
@@ -108,18 +114,18 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
 .speed small{font:600 14px var(--f-body);color:var(--plot-dim);margin-left:4px}
 .side{position:absolute;top:10px;right:12px;display:flex;flex-direction:column;gap:6px;width:max-content;max-width:48%}
 .probe:empty{display:none}
-.adbhud{position:absolute;top:64px;left:12px;max-width:min(48%,460px);background:var(--plot-glass);border:1px solid var(--plot-line);border-radius:7px;padding:7px 10px;font-size:12.5px;line-height:1.45;pointer-events:none;color:var(--plot-ink)}
+.adbhud{position:absolute;top:64px;left:12px;max-width:min(48%,460px);background:var(--plot-glass);border:1px solid var(--plot-line);border-radius:0;padding:7px 10px;font-size:12.5px;line-height:1.45;pointer-events:none;color:var(--plot-ink)}
 .adbhud b{font-weight:600}
 .adbhud .off{color:var(--plot-dim)}
 .adbhud .rf{color:#ff7a6e;font-weight:600}.adbhud .rp{color:#7fd67a;font-weight:600}.adbhud .rn{color:var(--plot-dim)}
 .adbctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .adbctl select{width:auto}
-.probe{background:var(--plot-glass);border:1px solid var(--plot-line);border-radius:7px;padding:7px 10px;font-size:13px;pointer-events:none}
+.probe{background:var(--plot-glass);border:1px solid var(--plot-line);border-radius:0;padding:7px 10px;font-size:13px;pointer-events:none}
 .probe b{display:block;font:600 13px var(--f-display);letter-spacing:.04em;color:var(--plot-accent);margin-bottom:2px}
 .probe div{display:flex;justify-content:space-between;gap:14px}
 .probe div span:last-child{color:#fff;font-weight:600}
 .tell{display:flex;flex-direction:column;gap:6px}
-.tell button{font:600 14px var(--f-body);background:var(--plot-glass);border:1px solid var(--plot-line);color:var(--plot-dim);border-radius:5px;padding:7px 12px;cursor:pointer}
+.tell button{font:600 14px var(--f-body);background:var(--plot-glass);border:1px solid var(--plot-line);color:var(--plot-dim);border-radius:0;padding:7px 12px;cursor:pointer}
 .tell button:hover{border-color:var(--plot-ink)}
 .tell button[aria-pressed=true].lowb{color:var(--low);border-color:var(--low)}
 .tell button[aria-pressed=true].highb{color:var(--high);border-color:var(--high)}
@@ -146,13 +152,15 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
 @media (max-width:900px) and (orientation:landscape){
   /* a phone on its side: settings beside the view */
   .bench{grid-template-columns:300px minmax(0,1fr);gap:10px}
-  body{padding-block:6px}
+  .wrap.app{padding-block:6px}
+  :root{--shell-h:36px}
+  .shell-actions .lbl,.shell-name .crumb{display:none}
   .bar{padding:6px 10px;gap:6px}
   .bar .seg button{padding:4px 8px;font-size:13px}
 }
 @media (max-width:900px) and (orientation:portrait){
   /* the view stays on screen while the settings scroll beneath it */
-  body{padding-block:8px}
+  .wrap.app{padding-block:8px}
   .bench{grid-template-columns:minmax(0,1fr);grid-template-rows:48% minmax(0,1fr);gap:10px}
   main{order:-1}
   .bar{padding:8px 10px;gap:6px}
@@ -168,34 +176,35 @@ main{min-width:0;min-height:0;display:flex;flex-direction:column}
   .speed{font-size:28px}
 }
 @media (prefers-reduced-motion:reduce){details.sec>summary::before{transition:none}}
+
+/* ---------- beamKit integration ---------- */
+.btn{min-height:32px;display:inline-flex;align-items:center;justify-content:center}
+.seg{border:0}
+.seg button+button{border-left:0}
+.seg button{font-size:13px}
+.legend{display:block;margin:0}
+.legend i{width:auto}
+.st{font-family:var(--f-display);text-transform:uppercase;letter-spacing:.06em;font-size:13px!important;color:var(--muted)}
+.screen.full,.screen:fullscreen{z-index:60}
+@media (max-width:640px){.shell-name .crumb{display:none}}
 </style>
 </head>
 <body>
-
-<div class="wrap">
+<div class="shell">
+  <div class="wrap">
+    <a class="shell-name" href="https://jalibakthermk.github.io/"><img src="favicon.svg" alt="" width="24" height="24"> virtualNightDrive <span class="crumb">· night drive lit by your headlamp IES files</span></a>
+    <div class="shell-actions">
+      <a href="https://jalibakthermk.github.io/" title="All projects"><svg class="i"><use href="#icon-grid"/></svg> <span class="lbl">Projects</span></a>
+      <a href="https://github.com/jalibakthermk/virtualNightDrive" title="Source code"><svg class="i"><use href="#icon-github"/></svg> <span class="lbl">Code</span></a>
+      <button type="button" data-bk-theme aria-label="Toggle light and dark theme" title="Toggle light / dark">
+        <svg class="i sun"><use href="#icon-sun"/></svg><svg class="i moon"><use href="#icon-moon"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+<div class="wrap app">
 <div class="bench">
 <aside aria-label="Drive settings" id="rail">
-  <header>
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 48 48" aria-hidden="true">
-        <defs><clipPath id="vdRoad"><path d="M3 45 L21 23 H27 L45 45 Z"/></clipPath></defs>
-        <rect x="1.5" y="1.5" width="45" height="45" rx="9" fill="var(--plot-bg)"/>
-        <path d="M3 45 L21 23 H27 L45 45 Z" fill="#26323d"/>
-        <g clip-path="url(#vdRoad)">
-          <ellipse cx="25" cy="39" rx="17" ry="8" fill="#1c5c8c"/>
-          <ellipse cx="25.5" cy="37.5" rx="11" ry="5.2" fill="#179498"/>
-          <ellipse cx="26" cy="36" rx="6.5" ry="3.2" fill="#d6d046"/>
-          <ellipse cx="26.2" cy="35.2" rx="3" ry="1.6" fill="#e24e3a"/>
-        </g>
-        <path d="M24 26 V28.5 M24 31.5 V35 M24 38.5 V43" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>
-        <path d="M5 23 H43" stroke="var(--plot-accent)" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-      <div>
-        <h1>Virtual Driver</h1>
-        <p class="sub">Night drive lit by your headlamp IES files.</p>
-      </div>
-    </div>
-  </header>
   <div class="rail-body">
   <div class="secs">
 
